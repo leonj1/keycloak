@@ -16,7 +16,7 @@ permissions:
 jobs:
   analysis:
     name: Analysis of Quarkus and Operator
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     if: github.repository == 'keycloak/keycloak'
     permissions:
       security-events: write # Required for SARIF uploads

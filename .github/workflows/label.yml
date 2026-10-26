@@ -9,7 +9,7 @@ permissions:
 jobs:
   label:
 
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     permissions:
       issues: write # Required to add labels to Issues
     steps:

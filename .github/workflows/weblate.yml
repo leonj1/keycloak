@@ -28,7 +28,7 @@ permissions:
 jobs:
   update-weblate:
     name: Trigger Weblate to pull the latest changes
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
 
     steps:
       # language=bash
