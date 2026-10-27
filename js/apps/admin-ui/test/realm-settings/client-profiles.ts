@@ -1,6 +1,11 @@
-import { Page, expect } from "@playwright/test";
-import { assertEmptyTable, assertRowExists, searchItem } from "../utils/table";
-import { confirmModal } from "../utils/modal";
+import { type Page, expect } from "@playwright/test";
+import { selectItem } from "../utils/form.ts";
+import {
+  assertEmptyTable,
+  assertRowExists,
+  searchItem,
+} from "../utils/table.ts";
+import { confirmModal } from "../utils/modal.ts";
 
 export async function goToClientPoliciesTab(page: Page) {
   await page.getByTestId("rs-clientPolicies-tab").click();
@@ -55,8 +60,7 @@ export async function clickAddExecutor(page: Page) {
 }
 
 export async function selectExecutorType(page: Page, type: string) {
-  await page.locator("#kc-executor").click();
-  await page.getByTestId(type).click();
+  await selectItem(page, "#kc-executor", page.getByTestId(type));
 }
 
 export async function assertIntentClient(page: Page, value: string) {

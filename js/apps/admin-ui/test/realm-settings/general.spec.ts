@@ -1,11 +1,14 @@
 import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { switchOff, switchOn } from "../utils/form";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { confirmModal } from "../utils/modal";
-import { goToClients, goToRealm, goToRealmSettings } from "../utils/sidebar";
+import adminClient from "../utils/AdminClient.ts";
+import { clickSwitch, switchOff, switchOn } from "../utils/form.ts";
+import { login } from "../utils/login.ts";
+import {
+  assertNotificationMessage,
+  selectActionToggleItem,
+} from "../utils/masthead.ts";
+import { confirmModal } from "../utils/modal.ts";
+import { goToClients, goToRealm, goToRealmSettings } from "../utils/sidebar.ts";
 import {
   assertDisplayName,
   assertFrontendURL,
@@ -15,10 +18,10 @@ import {
   fillDisplayName,
   fillFrontendURL,
   fillRequireSSL,
-} from "./general";
-import { SERVER_URL } from "../utils/constants";
+} from "./general.ts";
+import { SERVER_URL } from "../utils/constants.ts";
 
-test.describe("Realm settings general tab tests", () => {
+test.describe.serial("Realm settings general tab tests", () => {
   const realmName = `general-realm-settings-${uuid()}`;
 
   test.beforeAll(() => adminClient.createRealm(realmName));
@@ -63,11 +66,13 @@ test.describe("Realm settings general tab tests", () => {
 
   test("realm enable/disable switch", async ({ page }) => {
     // Enable realm
-    await switchOn(page, `#${realmName}-switch`);
+    const realmSwitch = page.locator(`#${realmName}-switch`);
+    await expect(realmSwitch).not.toBeChecked();
+    await switchOn(page, realmSwitch);
     await assertNotificationMessage(page, "Realm successfully updated");
 
     // Disable realm
-    await switchOff(page, `#${realmName}-switch`);
+    await clickSwitch(page, realmSwitch);
     await confirmModal(page);
     await assertNotificationMessage(page, "Realm successfully updated");
   });
@@ -119,5 +124,28 @@ test.describe("Realm settings general tab tests", () => {
     await fillDisplayName(page, "should_be_reverted");
     await clickRevertButton(page);
     await assertDisplayName(page, "display_name");
+  });
+});
+
+test.describe("Realm settings delete", () => {
+  const realmName = `delete-realm-settings-${uuid()}`;
+
+  test.beforeAll(() =>
+    adminClient.createRealm(realmName, { displayName: "Display name only" }),
+  );
+  test.afterAll(() => adminClient.deleteRealm(realmName));
+
+  test("deletes the realm by its name when a display name is set", async ({
+    page,
+  }) => {
+    await login(page);
+    await goToRealm(page, realmName);
+    await goToRealmSettings(page);
+
+    await selectActionToggleItem(page, "Delete");
+    await confirmModal(page);
+
+    await assertNotificationMessage(page, "The realm has been deleted");
+    expect(await adminClient.getRealm(realmName)).toBeNull();
   });
 });

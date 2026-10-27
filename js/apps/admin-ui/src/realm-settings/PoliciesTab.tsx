@@ -108,7 +108,7 @@ export const PoliciesTab = () => {
       await adminClient.clientPolicies.updatePolicy({
         policies: updatedPolicies,
       });
-      navigate(toClientPolicies({ realm, tab: "policies" }));
+      void navigate(toClientPolicies({ realm, tab: "policies" }));
       addAlert(t("updateClientPolicySuccess"), AlertVariant.success);
     } catch (error) {
       addError("updateClientPolicyError", error);
@@ -226,7 +226,9 @@ export const PoliciesTab = () => {
               message={t("noClientPolicies")}
               instructions={t("noClientPoliciesInstructions")}
               primaryActionText={t("createClientPolicy")}
-              onPrimaryAction={() => navigate(toAddClientPolicy({ realm }))}
+              onPrimaryAction={() =>
+                void navigate(toAddClientPolicy({ realm }))
+              }
             />
           }
           ariaLabelKey="clientPolicies"
@@ -272,9 +274,9 @@ export const PoliciesTab = () => {
                   clientPolicy={clientPolicy}
                   form={form}
                   saveStatus={saveStatus}
-                  onConfirm={() => {
+                  onConfirm={async () => {
                     form.setValue(clientPolicy.name!, false);
-                    saveStatus();
+                    await saveStatus();
                   }}
                 />
               ),

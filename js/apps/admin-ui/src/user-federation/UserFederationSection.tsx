@@ -76,7 +76,9 @@ export default function UserFederationSection() {
         <DropdownItem
           key={p.id}
           onClick={() =>
-            navigate(toNewCustomUserFederation({ realm, providerId: p.id! }))
+            void navigate(
+              toNewCustomUserFederation({ realm, providerId: p.id! }),
+            )
           }
         >
           {p.id.toUpperCase() == "LDAP"
@@ -201,7 +203,7 @@ export default function UserFederationSection() {
             </TextContent>
             <TextContent>
               <Text className="pf-v5-u-mt-lg" component={TextVariants.h2}>
-                {t("providers")}
+                {t("add-providers")}
               </Text>
             </TextContent>
             <hr className="pf-v5-u-mb-lg" />
@@ -210,7 +212,7 @@ export default function UserFederationSection() {
                 <ClickableCard
                   key={p.id}
                   onClick={() =>
-                    navigate(
+                    void navigate(
                       toNewCustomUserFederation({ realm, providerId: p.id! }),
                     )
                   }

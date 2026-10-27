@@ -17,44 +17,22 @@
 
 package org.keycloak.protocol.oid4vc.issuance.credentialbuilder;
 
-import java.util.ArrayList;
-import org.keycloak.component.ComponentModel;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.protocol.oid4vc.issuance.OID4VCIssuerWellKnownProvider;
-import org.keycloak.protocol.oid4vc.model.Format;
-import org.keycloak.provider.ProviderConfigProperty;
 
-import java.util.List;
+import org.keycloak.VCFormat;
+import org.keycloak.models.KeycloakSession;
 
 /**
  * @author <a href="mailto:Ingrid.Kamga@adorsys.com">Ingrid Kamga</a>
  */
 public class SdJwtCredentialBuilderFactory implements CredentialBuilderFactory {
 
-    protected static final List<ProviderConfigProperty> configProperties = new ArrayList<>();
-
     @Override
     public String getSupportedFormat() {
-        return Format.SD_JWT_VC;
+        return VCFormat.SD_JWT_VC;
     }
 
     @Override
-    public String getHelpText() {
-        return "Builds verifiable credentials on the SD-JWT format (https://drafts.oauth.net/oauth-sd-jwt-vc/draft-ietf-oauth-sd-jwt-vc.html).";
-    }
-
-    @Override
-    public List<ProviderConfigProperty> getConfigProperties() {
-        return configProperties;
-    }
-
-    @Override
-    public CredentialBuilder create(KeycloakSession session, ComponentModel model) {
-        // Use the credential issuer URI advertised on the metadata endpoint by default.
-        // An issuer DID configured at the realm level overrides that value.
-        String credentialIssuer = CredentialBuilderUtils.getIssuerDid(session)
-                .orElse(OID4VCIssuerWellKnownProvider.getIssuer(session.getContext()));
-
-        return new SdJwtCredentialBuilder(credentialIssuer);
+    public CredentialBuilder create(KeycloakSession session) {
+        return new SdJwtCredentialBuilder();
     }
 }

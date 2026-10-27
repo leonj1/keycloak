@@ -113,13 +113,13 @@ server nodes. Tests are usually using 2 cluster adapter nodes.
 
 ## Testsuite logging
 
-It is configured in `testsuite/integration-arquillian/tests/base/src/test/resources/log4j.properties` . You can see that logging of testsuite itself (category `org.keycloak.testsuite`) is debug by default.
+It is configured in `testsuite/integration-arquillian/tests/base/src/test/resources/logging.properties` . You can see that logging of testsuite itself (category `org.keycloak.testsuite`) is DEBUG by default.
 
-When you run tests with undertow (which is by default), there is logging for Keycloak server and adapter (category `org.keycloak` ) in `info` when you run tests from IDE, but `off` when
+When you run tests with undertow (which is by default), there is logging for Keycloak server and adapter (category `org.keycloak` ) in `INFO` when you run tests from IDE, but `OFF` when
 you run tests with maven. The reason is that, we don't want huge logs when running mvn build. However using system property `keycloak.logging.level` will override it. This can be used for both IDE or maven.
-So for example using `-Dkeycloak.logging.level=debug` will enable debug logging for keycloak server and adapter.
+So for example using `-Dkeycloak.logging.level=DEBUG` will enable debug logging for keycloak server and adapter.
 
-For more fine-tuning of individual categories, you can look at log4j.properties file and temporarily enable/disable them here.
+For more fine-tuning of individual categories, you can look at logging.properties file and temporarily enable/disable them here.
 
 ### Wildfly server logging
 
@@ -165,7 +165,7 @@ The `MigrationTest` test will:
 - Perform a couple of tests to verify data after the update are correct.
 - Stop MariaDB docker container. In case of a test failure, the MariaDB container is not stopped, so you can manually inspect the database.
 
-The first version of Keycloak on Quarkus is version `17.0.0`, but the initial versions have a complete different set of boot options that make co-existance impossible.
+The first version of Keycloak on Quarkus is version `17.0.0`, but the initial versions have a complete different set of boot options that make co-existence impossible.
 Therefore the first version that can be tested is `19.0.3`.
 You can execute those tests as follows:
 ```
@@ -433,104 +433,8 @@ and argument: `-p 8181`
 
 ## Run Docker Authentication test
 
-First, validate that your machine has a valid docker installation and that it is available to the JVM running the test.
-The exact steps to configure Docker depend on the operating system.
-
-By default, the test will run against Undertow based embedded Keycloak Server, thus no distribution build is required beforehand.
-The exact command line arguments depend on the operating system.
-
-
-### General guidelines
-
-If docker daemon doesn't run locally, or if you're not running on Linux, you may need
- to determine the IP of the bridge interface or local interface that Docker daemon can use to connect to Keycloak Server.
- Then specify that IP as additional system property called *host.ip*, for example:
-
-    -Dhost.ip=192.168.64.1
-
-If using Docker for Mac, you can create an alias for your local network interface:
-
-    sudo ifconfig lo0 alias 10.200.10.1/24
-
-Then pass the IP as *host.ip*:
-
-    -Dhost.ip=10.200.10.1
-
-
-If you're running a Docker fork that always lists a host component of an image on `docker images` (e.g. Fedora / RHEL Docker)
-use `-Ddocker.io-prefix-explicit=true` argument when running the test.
-
-
-### Fedora
-
-On Fedora one way to set up Docker server is the following:
-
-    # install docker
-    sudo dnf install docker
-
-    # configure docker
-    # remove --selinux-enabled from OPTIONS
-    sudo vi /etc/sysconfig/docker
-
-    # create docker group and add your user (so docker wouldn't need root permissions)
-    sudo groupadd docker && sudo gpasswd -a ${USER} docker && sudo systemctl restart docker
-    newgrp docker
-
-    # you need to login again after this
-
-
-    # make sure Docker is available
-    docker pull registry:2
-
-You may also need to add an iptables rule to allow container to host traffic
-
-    sudo iptables -I INPUT -i docker0 -j ACCEPT
-
-Then, run the test passing `-Ddocker.io-prefix-explicit=true`:
-
-    mvn -f testsuite/integration-arquillian/tests/base/pom.xml \
-        clean test \
-        -Dtest=DockerClientTest \
-        -Dkeycloak.profile.feature.docker=enabled \
-        -Ddocker.io-prefix-explicit=true
-
-
-### macOS
-
-On macOS all you need to do is install Docker for Mac, start it up, and check that it works:
-
-    # make sure Docker is available
-    docker pull registry:2
-
-Be especially careful to restart Docker server after every sleep / suspend to ensure system clock of Docker VM is synchronized with
-that of the host operating system - Docker for Mac runs inside a VM.
-
-
-Then, run the test passing `-Dhost.ip=IP` where IP corresponds to en0 interface or an alias for localhost:
-
-    mvn -f testsuite/integration-arquillian/tests/base/pom.xml \
-        clean test \
-        -Dtest=DockerClientTest \
-        -Dkeycloak.profile.feature.docker=enabled \
-        -Dhost.ip=10.200.10.1
-
-
-
-### Running Docker test against Keycloak Server distribution
-
-Make sure to build the distribution:
-
-    mvn clean install -f distribution
-
-Then, before running the test, setup Keycloak Server distribution for the tests:
-
-    mvn -f testsuite/integration-arquillian/servers/pom.xml \
-        clean install \
-        -Pauth-server-quarkus
-
-When running the test, add the following arguments to the command line:
-
-    -Pauth-server-quarkus -Pauth-server-enable-disable-feature -Dfeature.name=docker -Dfeature.value=enabled
+The Docker authentication test was migrated to the Keycloak Test Framework.
+See [tests/docs/DOCKER_AUTHENTICATION_TEST.md](../../tests/docs/DOCKER_AUTHENTICATION_TEST.md) for setup and execution instructions.
 
 ## Java 11 support
 Java 11 requires some arguments to be passed to JVM. Those can be activated using `-Pjava11-auth-server` and
@@ -567,8 +471,8 @@ More info: http://javahowto.blogspot.cz/2010/09/java-agentlibjdwp-for-attaching.
 In order to reproduce some specific cookies behaviour in browsers (like SameSite policies or 3rd party cookie blocking),
 some subset of tests needs to be ran with different hosts for auth server and app/IdP server in order to simulate third
 party contexts. Those hosts must be different from localhost as that host has some special treatment from browsers. At
-the same time both hosts must use different domains to be considered cross-origin, e.g. `127.0.0.1.nip.io` and
-`127.0.0.1.xip.io`. NOT `app1.127.0.0.1.nip.io` and `app2.127.0.0.1.nip.io`!!
+the same time both hosts must use different domains to be considered cross-origin, e.g. `localtest.me` and
+`127.0.0.1.xip.io`. NOT `app1.localtest.me` and `app2.localtest.me`!!
 
 Also, those new cookies policies are currently not yet enabled by default (which will change in the near future). To test
 those policies, you need the latest stable Firefox together with `firefox-strict-cookies` profile. This profile sets the
@@ -603,7 +507,7 @@ we rely on [nip.io](https://nip.io) for DNS switching, so tests will work everyw
 ### Tips & Tricks:
 Although it _should_ work in general, you may experience an exception like this:
 ```
-java.lang.RuntimeException: java.net.UnknownHostException: keycloak.127.0.0.1.nip.io: nodename nor servname provided, 
+java.lang.RuntimeException: java.net.UnknownHostException: keycloak.localtest.me: nodename nor servname provided, 
 or not known at org.keycloak.testsuite.util.OAuthClient.doWellKnownRequest(OAuthClient.java:1032)
 at org.keycloak.testsuite.url.DefaultHostnameTest.assertBackendForcedToFrontendWithMatchingHostname(
 DefaultHostnameTest.java:226)
@@ -656,31 +560,9 @@ For running testsuite with server using BCFIPS approved mode, those additional p
 -Dauth.server.fips.mode=strict \
 -Dauth.server.supported.keystore.types=BCFKS \
 -Dauth.server.keystore.type=bcfks \
--Dauth.server.supported.rsa.key.sizes=2048,4096
+-Dauth.server.supported.rsa.key.sizes=2048,3072,4096
 ```
 The log should contain `KeycloakFipsSecurityProvider` mentioning "Approved mode". Something like:
 ```
 KC(BCFIPS version 1.000203 Approved Mode, FIPS-JVM: enabled) version 1.0 - class org.keycloak.crypto.fips.KeycloakFipsSecurityProvider,
-```
-
-## Aurora DB Tests
-To run the Aurora DB tests on a local machine, do the following:
-
-1. Provision an Aurora DB:
-```bash
-AURORA_CLUSTER="example-cluster"
-AURORA_REGION=eu-west-1
-AURORA_PASSWORD=TODO
-source ./.github/scripts/aws/rds/aurora_create.sh
-```
-
-2. Execute the store integration tests:
-```bash
-TESTS=`testsuite/integration-arquillian/tests/base/testsuites/suite.sh database`
-mvn test -Pauth-server-quarkus -Pdb-aurora-postgres -Dtest=$TESTS  -Dauth.server.db.host=$AURORA_ENDPOINT -Dkeycloak.connectionsJpa.password=$AURORA_PASSWORD -pl testsuite/integration-arquillian/tests/base
-```
-
-3. Teardown Aurora DB instance:
-```bash
-./.github/scripts/aws/rds/aurora_delete.sh
 ```

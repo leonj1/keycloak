@@ -28,10 +28,15 @@ import {
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { deleteConsent, getApplications } from "../api/methods";
+import { AccountEnvironment } from "..";
+import {
+  deleteApplicationSessions,
+  deleteConsent,
+  getApplications,
+} from "../api/methods";
 import { ClientRepresentation } from "../api/representations";
 import { Page } from "../components/page/Page";
-import { TFuncKey } from "../i18n";
+import type { TFuncKey } from "../i18n-type";
 import { formatDate } from "../utils/formatDate";
 import { useAccountAlerts } from "../utils/useAccountAlerts";
 import { usePromise } from "../utils/usePromise";
@@ -42,7 +47,7 @@ type Application = ClientRepresentation & {
 
 export const Applications = () => {
   const { t } = useTranslation();
-  const context = useEnvironment();
+  const context = useEnvironment<AccountEnvironment>();
   const { addAlert, addError } = useAccountAlerts();
 
   const [applications, setApplications] = useState<Application[]>();
@@ -51,7 +56,17 @@ export const Applications = () => {
 
   usePromise(
     (signal) => getApplications({ signal, context }),
-    (clients) => setApplications(clients.map((c) => ({ ...c, open: false }))),
+    (clients) =>
+      setApplications(
+        [...clients]
+          .sort((a, b) =>
+            (a.clientName || a.clientId).localeCompare(
+              b.clientName || b.clientId,
+              context.environment.locale,
+            ),
+          )
+          .map((c) => ({ ...c, open: false })),
+      ),
     [key],
   );
 
@@ -70,6 +85,16 @@ export const Applications = () => {
       addAlert(t("removeConsentSuccess"));
     } catch (error) {
       addError("removeConsentError", error);
+    }
+  };
+
+  const endApplicationSession = async (id: string, name: string) => {
+    try {
+      await deleteApplicationSessions(context, id);
+      refresh();
+      addAlert(t("endApplicationSessionSuccess", { name }));
+    } catch (error) {
+      addError("endApplicationSessionError", error);
     }
   };
 
@@ -114,6 +139,11 @@ export const Applications = () => {
                 >
                   <strong>{t("status")}</strong>
                 </DataListCell>,
+                <DataListCell
+                  key="applications-list-action-header"
+                  width={2}
+                  className="pf-v5-u-pt-md"
+                />,
               ]}
             />
           </DataListItemRow>
@@ -141,7 +171,9 @@ export const Applications = () => {
                         className="pf-v5-u-pl-0 title-case"
                         component="a"
                         variant="link"
-                        onClick={() => window.open(application.effectiveUrl)}
+                        href={application.effectiveUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
                       >
                         {label(
                           t,
@@ -169,7 +201,37 @@ export const Applications = () => {
                     {application.offlineAccess ? ", " + t("offlineAccess") : ""}
                   </DataListCell>,
                   <DataListCell width={2} key={`status${application.clientId}`}>
-                    {application.inUse ? t("inUse") : t("notInUse")}
+                    {application.inUse || application.offlineAccess
+                      ? t("inUse")
+                      : t("notInUse")}
+                  </DataListCell>,
+                  <DataListCell width={2} key={`action${application.clientId}`}>
+                    {(application.inUse || application.offlineAccess) &&
+                      application.clientId !== context.environment.clientId && (
+                        <ContinueCancelModal
+                          buttonTitle={t("endApplicationSession")}
+                          modalTitle={t("endApplicationSession")}
+                          continueLabel={t("confirm")}
+                          cancelLabel={t("cancel")}
+                          buttonVariant="secondary"
+                          onContinue={() =>
+                            endApplicationSession(
+                              application.clientId,
+                              label(
+                                t,
+                                application.clientName || application.clientId,
+                              ),
+                            )
+                          }
+                        >
+                          {t("endApplicationSessionMessage", {
+                            name: label(
+                              t,
+                              application.clientName || application.clientId,
+                            ),
+                          })}
+                        </ContinueCancelModal>
+                      )}
                   </DataListCell>,
                 ]}
               />
@@ -216,7 +278,8 @@ export const Applications = () => {
                       </DescriptionListTerm>
                       {application.consent.grantedScopes.map((scope) => (
                         <DescriptionListDescription key={`scope${scope.id}`}>
-                          <CheckIcon /> {t(scope.name as TFuncKey)}
+                          <CheckIcon />{" "}
+                          {t(scope.name as TFuncKey, scope.displayText)}
                         </DescriptionListDescription>
                       ))}
                     </DescriptionListGroup>
@@ -253,7 +316,10 @@ export const Applications = () => {
                         {t("accessGrantedOn")}
                       </DescriptionListTerm>
                       <DescriptionListDescription>
-                        {formatDate(new Date(application.consent.createdDate))}
+                        {formatDate(
+                          new Date(application.consent.createdDate),
+                          context.environment.locale,
+                        )}
                       </DescriptionListDescription>
                     </DescriptionListGroup>
                   </>

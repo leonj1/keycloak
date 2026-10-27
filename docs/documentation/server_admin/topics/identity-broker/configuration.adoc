@@ -16,7 +16,7 @@ image:images/identity-providers.png[Identity Providers]
 .Add Facebook identity Provider
 image:images/add-identity-provider.png[Add Facebook Identity Provider]
 +
-When you configure an identity provider, the identity provider appears on the {project_name} login page as an option. You can place custom icons on the login screen for each identity provider. See  link:{developerguide_link}#custom-identity-providers-icons[custom icons] for more information.
+When you configure an identity provider, the identity provider appears on the {project_name} login page as an option. You can place custom icons on the login screen for each identity provider. See  https://www.keycloak.org/ui-customization/themes#custom-identity-providers-icons[custom icons] for more information.
 +
 .IDP login page
 image:images/identity-provider-login-page.png[]
@@ -55,7 +55,8 @@ Although each type of identity provider has its configuration options, all share
 |Trust Email
 |When *ON*, {project_name} trusts email addresses from the identity provider. If the realm requires email validation, users that log in from this identity provider do not need to perform the email verification process.
 If the target identity provider supports email verification and advertises this information when returning the user profile information, the email of the federated user will be (un)marked as verified.
-For instance, an OpenID Connect Provider returning a `email_verified` claim in their ID Tokens.
+For an OpenID Connect provider, this applies to the `email_verified` claim accompanying the email address in its ID token or UserInfo response.
+If the claim is absent, the *Trust Email* setting provides the default verification status.
 Note that this setting will set the email as verified when the user is federated for the first time and on subsequent logins
 through the broker if the sync mode is set to `FORCE`.
 
@@ -83,4 +84,8 @@ through the broker if the sync mode is set to `FORCE`.
 
 |Case-sensitive username
 |If enabled, the original username from the identity provider is kept as is when federating users. Otherwise, the username from the identity provider is lower-cased and might not match the original value if it is case-sensitive. This setting only affects the username associated with the federated identity as usernames in the server are always in lower-case.
+
+|Show in Account console
+|Defines how the identity provider will be available from the account console. If set to `Always`, it is always available.
+If set to `When linked`, it will be shown only when the user is linked to it. Otherwise, if set to `Never`, it will not be available even if the user is linked to it.
 |===

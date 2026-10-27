@@ -17,10 +17,12 @@
 
 package org.keycloak.quarkus.runtime.services.metrics.events;
 
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Meter;
-import io.micrometer.core.instrument.Tag;
-import org.jboss.logging.Logger;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.events.Event;
@@ -28,23 +30,25 @@ import org.keycloak.events.EventListenerProvider;
 import org.keycloak.events.EventListenerTransaction;
 import org.keycloak.events.EventType;
 import org.keycloak.events.admin.AdminEvent;
+import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.Tag;
+import org.jboss.logging.Logger;
 
 public class MicrometerUserEventMetricsEventListenerProvider implements EventListenerProvider {
 
     private static final Logger logger = Logger.getLogger(MicrometerUserEventMetricsEventListenerProvider.class);
 
-    private static final String REALM_TAG = "realm";
-    private static final String IDP_TAG = "idp";
-    private static final String CLIENT_ID_TAG = "client.id";
-    private static final String ERROR_TAG = "error";
+    static final String REALM_TAG = "realm";
+    static final String IDP_TAG = "idp";
+    static final String CLIENT_ID_TAG = "client.id";
+    static final String ERROR_TAG = "error";
     private static final String EVENT_TAG = "event";
 
+    private final KeycloakSession session;
     private final boolean withIdp;
     private final boolean withRealm;
     private final boolean withClientId;
@@ -55,6 +59,7 @@ public class MicrometerUserEventMetricsEventListenerProvider implements EventLis
     private final Meter.MeterProvider<Counter> meterProvider;
 
     public MicrometerUserEventMetricsEventListenerProvider(KeycloakSession session, boolean withIdp, boolean withRealm, boolean withClientId, HashSet<String> events, Meter.MeterProvider<Counter> meterProvider) {
+        this.session = session;
         this.withIdp = withIdp;
         this.withRealm = withRealm;
         this.withClientId = withClientId;
@@ -80,18 +85,18 @@ public class MicrometerUserEventMetricsEventListenerProvider implements EventLis
         List<Tag> tags = new ArrayList<>(5);
 
         tags.add(Tag.of(EVENT_TAG, eventTag));
-        tags.add(Tag.of(ERROR_TAG, getError(event)));
+        addTag(tags, ERROR_TAG, getError(event));
 
         if (withRealm) {
-            tags.add(Tag.of(REALM_TAG, nullToEmpty(event.getRealmName())));
+            addTag(tags, REALM_TAG, event.getRealmName());
         }
 
         if (withIdp) {
-            tags.add(Tag.of(IDP_TAG, getIdentityProvider(event)));
+            addTag(tags, IDP_TAG, getIdentityProvider(event));
         }
 
         if (withClientId) {
-            tags.add(Tag.of(CLIENT_ID_TAG, getClientId(event)));
+            addTag(tags, CLIENT_ID_TAG, getClientId(event));
         }
 
         meterProvider.withTags(tags).increment();
@@ -103,18 +108,39 @@ public class MicrometerUserEventMetricsEventListenerProvider implements EventLis
     }
 
     private String getIdentityProvider(Event event) {
-        String identityProvider = null;
         if (event.getDetails() != null) {
-            identityProvider = event.getDetails().get(Details.IDENTITY_PROVIDER);
+            String identityProvider = event.getDetails().get(Details.IDENTITY_PROVIDER);
+            if (identityProvider == null || getError(event) == null) {
+                return identityProvider;
+            }
+            // When there is an error, the provider alias is user input and might not exist.
+            // Validate it to avoid a metrics cardinality explosion.
+            var realmSetInContext = session.getContext().getRealm();
+            boolean resetContextNeeded = false;
+            if (realmSetInContext == null || !Objects.equals(realmSetInContext.getId(), event.getRealmId())) {
+                session.getContext().setRealm(session.realms().getRealm(event.getRealmId()));
+                resetContextNeeded = true;
+            }
+            try {
+                if (session.getContext().getRealm() != null) {
+                    IdentityProviderModel byAlias = session.identityProviders().getByAlias(identityProvider);
+                    if (byAlias != null) {
+                        return identityProvider;
+                    }
+                }
+            } finally {
+                if (resetContextNeeded) {
+                    session.getContext().setRealm(realmSetInContext);
+                }
+            }
         }
-        return nullToEmpty(identityProvider);
+        return null;
     }
 
 
     private String getClientId(Event event) {
         // Don't use the clientId as a tag value of the event CLIENT_NOT_FOUND as it would lead to a metrics cardinality explosion
-        return nullToEmpty(Errors.CLIENT_NOT_FOUND.equals(event.getError())
-                ? "unknown" : event.getClientId());
+        return Errors.CLIENT_NOT_FOUND.equals(event.getError()) ? "unknown" : event.getClientId();
     }
 
     private String getError(Event event) {
@@ -122,13 +148,12 @@ public class MicrometerUserEventMetricsEventListenerProvider implements EventLis
         if (error == null && event.getType().name().endsWith("_ERROR")) {
             error = "unknown";
         }
-        return nullToEmpty(error);
+        return error;
     }
 
-    private String nullToEmpty(String value) {
-        return value == null ? "" : value;
+    private void addTag(List<Tag> tags, String tagName, String value) {
+        tags.add(Tag.of(tagName, value != null ? value : ""));
     }
-
 
     public static String format(EventType type) {
         // Remove the error suffix so that all events have the same tag.

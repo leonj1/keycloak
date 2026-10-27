@@ -17,6 +17,8 @@
 
 package org.keycloak.partialimport;
 
+import java.util.List;
+
 import org.keycloak.models.GroupModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -24,8 +26,6 @@ import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.models.utils.RepresentationToModel;
 import org.keycloak.representations.idm.GroupRepresentation;
 import org.keycloak.representations.idm.PartialImportRepresentation;
-
-import java.util.List;
 
 /**
  * Partial import handler for Groups.
@@ -45,6 +45,9 @@ public class GroupsPartialImport extends AbstractPartialImport<GroupRepresentati
     }
 
     private GroupModel findGroupModel(KeycloakSession session, RealmModel realm, GroupRepresentation groupRep) {
+        if (groupRep.getPath() == null) {
+            return session.groups().getGroupByName(realm, null, groupRep.getName());
+        }
         return KeycloakModelUtils.findGroupByPath(session, realm, groupRep.getPath());
     }
 
@@ -60,7 +63,8 @@ public class GroupsPartialImport extends AbstractPartialImport<GroupRepresentati
 
     @Override
     public String existsMessage(RealmModel realm, GroupRepresentation groupRep) {
-        return "Group '" + groupRep.getPath() + "' already exists";
+        String identifier = groupRep.getPath() == null ? groupRep.getName() : groupRep.getPath();
+        return "Group '" + identifier + "' already exists";
     }
 
     @Override

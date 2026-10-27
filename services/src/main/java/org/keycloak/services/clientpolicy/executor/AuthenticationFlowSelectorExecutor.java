@@ -17,16 +17,15 @@
 
 package org.keycloak.services.clientpolicy.executor;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import org.keycloak.authentication.authenticators.util.AcrStore;
 import org.keycloak.models.Constants;
-import org.keycloak.models.KeycloakSession;
 import org.keycloak.representations.idm.ClientPolicyExecutorConfigurationRepresentation;
 import org.keycloak.services.clientpolicy.ClientPolicyContext;
 import org.keycloak.services.clientpolicy.ClientPolicyEvent;
 import org.keycloak.services.clientpolicy.ClientPolicyException;
 import org.keycloak.services.clientpolicy.context.AuthorizationRequestContext;
 import org.keycloak.sessions.AuthenticationSessionModel;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * @author <a href="mailto:ggrazian@redhat.com">Giuseppe Graziano</a>
@@ -74,7 +73,7 @@ public class AuthenticationFlowSelectorExecutor implements ClientPolicyExecutorP
 
     @Override
     public String getProviderId() {
-        return PKCEEnforcerExecutorFactory.PROVIDER_ID;
+        return AuthenticationFlowSelectorExecutorFactory.PROVIDER_ID;
     }
 
     @Override
@@ -87,9 +86,14 @@ public class AuthenticationFlowSelectorExecutor implements ClientPolicyExecutorP
 
     private void executeOnAuthorizationRequest(AuthenticationSessionModel authSession) {
         if (configuration.getAuthFlowAlias() != null) {
+            // Save as a client note so the enforced flow survives a login restart or rebuild.
+            // Also save as an auth note so older servers can still read it during an upgrade.
+            // TODO: the auth-note write (and the auth-note fallback reads) exist only so old and new nodes agree during a rolling upgrade.
+            authSession.setClientNote(Constants.REQUESTED_AUTHENTICATION_FLOW, configuration.getAuthFlowAlias());
             authSession.setAuthNote(Constants.REQUESTED_AUTHENTICATION_FLOW, configuration.getAuthFlowAlias());
             // auth flow selected via acr condition
             if (configuration.getAuthFlowLoa() != null) {
+                authSession.setClientNote(Constants.AUTHENTICATION_FLOW_LEVEL_OF_AUTHENTICATION, String.valueOf(configuration.getAuthFlowLoa()));
                 authSession.setAuthNote(Constants.AUTHENTICATION_FLOW_LEVEL_OF_AUTHENTICATION, String.valueOf(configuration.getAuthFlowLoa()));
             }
         }

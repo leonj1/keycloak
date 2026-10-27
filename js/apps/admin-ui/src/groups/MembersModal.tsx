@@ -14,6 +14,12 @@ type MemberModalProps = {
   membersQuery: (first?: number, max?: number) => Promise<UserRepresentation[]>;
   onAdd: (users: UserRepresentation[]) => Promise<void>;
   onClose: () => void;
+  onBack?: () => void;
+  orgId?: string;
+  titleKey?: string;
+  description?: string;
+  confirmLabelKey?: string;
+  filterEmptyEmail?: boolean;
 };
 
 const UserDetail = (user: UserRepresentation) => {
@@ -34,6 +40,12 @@ export const MemberModal = ({
   membersQuery,
   onAdd,
   onClose,
+  onBack,
+  orgId,
+  titleKey = "addMember",
+  description,
+  confirmLabelKey = "add",
+  filterEmptyEmail = false,
 }: MemberModalProps) => {
   const { adminClient } = useAdminClient();
 
@@ -49,9 +61,23 @@ export const MemberModal = ({
       search: search || "",
     };
 
+    const usersQuery = orgId
+      ? async (params: { [name: string]: string | number }) => {
+          return await adminClient.organizations.listMembers({
+            orgId,
+            ...params,
+          });
+        }
+      : async (params: { [name: string]: string | number }) => {
+          return await adminClient.users.find({ ...params });
+        };
+
     try {
-      const users = await adminClient.users.find({ ...params });
-      return differenceBy(users, members, "id").slice(0, max);
+      const users = await usersQuery(params);
+      const filtered = differenceBy(users, members, "id");
+      return (
+        filterEmptyEmail ? filtered.filter((u) => u.email) : filtered
+      ).slice(0, max);
     } catch (error) {
       addError("noUsersFoundError", error);
       return [];
@@ -61,10 +87,23 @@ export const MemberModal = ({
   return (
     <Modal
       variant={ModalVariant.large}
-      title={t("addMember")}
+      title={t(titleKey)}
+      description={description}
       isOpen
       onClose={onClose}
       actions={[
+        ...(onBack
+          ? [
+              <Button
+                data-testid="back"
+                key="back"
+                variant="secondary"
+                onClick={onBack}
+              >
+                {t("back")}
+              </Button>,
+            ]
+          : []),
         <Button
           data-testid="add"
           key="confirm"
@@ -74,7 +113,7 @@ export const MemberModal = ({
             onClose();
           }}
         >
-          {t("add")}
+          {t(confirmLabelKey)}
         </Button>,
         <Button
           data-testid="cancel"

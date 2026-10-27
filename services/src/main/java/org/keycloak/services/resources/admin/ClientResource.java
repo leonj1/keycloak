@@ -16,54 +16,74 @@
  */
 package org.keycloak.services.resources.admin;
 
-import org.eclipse.microprofile.openapi.annotations.Operation;
-import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
-import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
-import org.eclipse.microprofile.openapi.annotations.tags.Tag;
-import org.jboss.logging.Logger;
-import org.jboss.resteasy.reactive.NoCache;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Stream;
+
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
+import jakarta.ws.rs.DefaultValue;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.NotFoundException;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response.Status;
+
 import org.keycloak.OAuthErrorException;
-import org.keycloak.authorization.fgap.AdminPermissionsSchema;
 import org.keycloak.authorization.admin.AuthorizationService;
+import org.keycloak.client.clienttype.ClientType;
 import org.keycloak.client.clienttype.ClientTypeException;
+import org.keycloak.client.clienttype.ClientTypeManager;
 import org.keycloak.common.ClientConnection;
 import org.keycloak.common.Profile;
-import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.common.util.Time;
 import org.keycloak.events.Errors;
 import org.keycloak.events.admin.OperationType;
 import org.keycloak.events.admin.ResourceType;
-import org.keycloak.models.AuthenticatedClientSessionModel;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.ClientScopeModel;
 import org.keycloak.models.ClientSecretConstants;
 import org.keycloak.models.Constants;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelDuplicateException;
+import org.keycloak.models.ModelValidationException;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserCredentialModel;
-import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.models.utils.ModelToRepresentation;
 import org.keycloak.models.utils.RepresentationToModel;
+import org.keycloak.models.utils.StripSecretsUtils;
 import org.keycloak.protocol.ClientInstallationProvider;
+import org.keycloak.protocol.LoginProtocol;
+import org.keycloak.protocol.LoginProtocolFactory;
 import org.keycloak.protocol.oidc.OIDCClientSecretConfigWrapper;
 import org.keycloak.representations.adapters.action.GlobalRequestResult;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.ClientScopeRepresentation;
 import org.keycloak.representations.idm.CredentialRepresentation;
 import org.keycloak.representations.idm.ManagementPermissionReference;
-import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.representations.idm.UserSessionRepresentation;
 import org.keycloak.services.ErrorResponse;
 import org.keycloak.services.ErrorResponseException;
+import org.keycloak.services.clientpolicy.ClientPolicyEvent;
 import org.keycloak.services.clientpolicy.ClientPolicyException;
 import org.keycloak.services.clientpolicy.context.AdminClientUnregisterContext;
 import org.keycloak.services.clientpolicy.context.AdminClientUpdateContext;
 import org.keycloak.services.clientpolicy.context.AdminClientUpdatedContext;
 import org.keycloak.services.clientpolicy.context.AdminClientViewContext;
+import org.keycloak.services.clientpolicy.context.ClientNodeRegistrationContext;
 import org.keycloak.services.clientpolicy.context.ClientSecretRotationContext;
 import org.keycloak.services.clientregistration.ClientRegistrationTokenUtils;
 import org.keycloak.services.clientregistration.policy.RegistrationAuth;
@@ -78,24 +98,16 @@ import org.keycloak.utils.ProfileHelper;
 import org.keycloak.utils.ReservedCharValidator;
 import org.keycloak.validation.ValidationUtil;
 
-import jakarta.ws.rs.BadRequestException;
-import jakarta.ws.rs.Consumes;
-import jakarta.ws.rs.DELETE;
-import jakarta.ws.rs.GET;
-import jakarta.ws.rs.NotFoundException;
-import jakarta.ws.rs.POST;
-import jakarta.ws.rs.PUT;
-import jakarta.ws.rs.Path;
-import jakarta.ws.rs.PathParam;
-import jakarta.ws.rs.Produces;
-import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.Response.Status;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
-import java.util.stream.Stream;
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
+import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.NoCache;
+
+import static org.keycloak.utils.StreamsUtil.paginatedStream;
 
 
 /**
@@ -108,13 +120,15 @@ import java.util.stream.Stream;
 @Extension(name = KeycloakOpenAPI.Profiles.ADMIN, value = "")
 public class ClientResource {
     protected static final Logger logger = Logger.getLogger(ClientResource.class);
-    protected RealmModel realm;
-    private AdminPermissionEvaluator auth;
-    private AdminEventBuilder adminEvent;
-    protected ClientModel client;
+    protected final RealmModel realm;
+    private final AdminPermissionEvaluator auth;
+    private final AdminEventBuilder adminEvent;
+    protected final ClientModel client;
     protected final KeycloakSession session;
 
     protected final ClientConnection clientConnection;
+
+    private final Map<String, Boolean> clientVisibility = new HashMap<>();
 
     public ClientResource(RealmModel realm, AdminPermissionEvaluator auth, ClientModel clientModel, KeycloakSession session, AdminEventBuilder adminEvent) {
         this.realm = realm;
@@ -141,11 +155,15 @@ public class ClientResource {
     @Consumes(MediaType.APPLICATION_JSON)
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
     @Operation( summary = "Update the client")
+    @APIResponses(value = {
+        @APIResponse(responseCode = "204", description = "No Content"),
+        @APIResponse(responseCode = "400", description = "Bad Request"),
+        @APIResponse(responseCode = "409", description = "Conflict")
+    })
     public Response update(final ClientRepresentation rep) {
         auth.clients().requireConfigure(client);
 
         try {
-            session.setAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED,Boolean.FALSE);
             session.clientPolicy().triggerOnEvent(new AdminClientUpdateContext(rep, client, auth.adminAuth()));
 
             updateClientFromRep(rep, client, session);
@@ -160,11 +178,10 @@ public class ClientResource {
 
             session.clientPolicy().triggerOnEvent(new AdminClientUpdatedContext(rep, client, auth.adminAuth()));
 
-            if (!(boolean) session.getAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED)){
+            if (!Boolean.TRUE.equals(session.removeAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED))){
                 logger.debugv("Removing the previous rotation info for client {0}{1}, if there is",client.getClientId(),client.getName());
                 OIDCClientSecretConfigWrapper.fromClientModel(client).removeClientSecretRotationInfo();
             }
-            session.removeAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED);
 
             adminEvent.operation(OperationType.UPDATE).resourcePath(session.getContext().getUri()).representation(rep).success();
             return Response.noContent().build();
@@ -174,6 +191,8 @@ public class ClientResource {
             throw ErrorResponse.error(cte.getMessage(), cte.getParameters(), Response.Status.BAD_REQUEST);
         } catch (ClientPolicyException cpe) {
             throw new ErrorResponseException(cpe.getError(), cpe.getErrorDetail(), Response.Status.BAD_REQUEST);
+        } catch (ModelValidationException e) {
+            throw new ErrorResponseException(Errors.INVALID_INPUT, e.getMessage(), Response.Status.BAD_REQUEST);
         }
     }
 
@@ -188,19 +207,33 @@ public class ClientResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
     @Operation( summary = "Get representation of the client")
     public ClientRepresentation getClient() {
+        viewClientModel();
+
+        ClientRepresentation representation = ModelToRepresentation.toRepresentation(client, session);
+
+        if (!auth.clients().canManage(client)) {
+            StripSecretsUtils.stripClient(representation);
+        }
+
+        representation.setAccess(auth.clients().getAccess(client));
+
+        if (client.isServiceAccountsEnabled()) {
+            ModelToRepresentation.setServiceAccountUserId(session, client, representation);
+        }
+
+        return representation;
+    }
+
+    public ClientModel viewClientModel() {
+        auth.clients().requireView(client);
+
         try {
             session.clientPolicy().triggerOnEvent(new AdminClientViewContext(client, auth.adminAuth()));
         } catch (ClientPolicyException cpe) {
             throw new ErrorResponseException(cpe.getError(), cpe.getErrorDetail(), Response.Status.BAD_REQUEST);
         }
 
-        auth.clients().requireView(client);
-
-        ClientRepresentation representation = ModelToRepresentation.toRepresentation(client, session);
-
-        representation.setAccess(auth.clients().getAccess(client));
-
-        return representation;
+        return client;
     }
 
     /**
@@ -224,7 +257,8 @@ public class ClientResource {
 
         ClientInstallationProvider provider = session.getProvider(ClientInstallationProvider.class, providerId);
         if (provider == null) throw new NotFoundException("Unknown Provider");
-        return provider.generateInstallation(session, realm, client, session.getContext().getUri().getBaseUri());
+        return provider.generateInstallation(session, realm, client, session.getContext().getUri().getBaseUri(),
+                auth.clients().canManage(client));
     }
 
     /**
@@ -242,7 +276,9 @@ public class ClientResource {
             throw new NotFoundException("Could not find client");
         }
 
-        AdminPermissionsSchema.SCHEMA.throwExceptionIfAdminPermissionClient(session, client.getId());
+        ClientRepresentation clientRepresentation = new ClientRepresentation();
+        clientRepresentation.setId(client.getId());
+        clientRepresentation.setClientId(client.getClientId());
 
         try {
             session.clientPolicy().triggerOnEvent(new AdminClientUnregisterContext(client, auth.adminAuth()));
@@ -251,7 +287,7 @@ public class ClientResource {
         }
 
         if (new ClientManager(new RealmManager(session)).removeClient(realm, client)) {
-            adminEvent.operation(OperationType.DELETE).resourcePath(session.getContext().getUri()).success();
+            adminEvent.operation(OperationType.DELETE).representation(clientRepresentation).resourcePath(session.getContext().getUri()).success();
         }
         else {
             throw new ErrorResponseException(OAuthErrorException.INVALID_REQUEST, "Could not delete client",
@@ -276,11 +312,10 @@ public class ClientResource {
             auth.clients().requireConfigure(client);
 
             logger.debug("regenerateSecret");
-            session.setAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED,Boolean.FALSE);
 
             ClientRepresentation representation = ModelToRepresentation.toRepresentation(client, session);
             ClientSecretRotationContext secretRotationContext = new ClientSecretRotationContext(
-                representation, client, client.getSecret());
+                representation, client, client.getSecret(), auth.adminAuth());
 
             String secret = KeycloakModelUtils.generateSecret(client);
 
@@ -290,13 +325,12 @@ public class ClientResource {
             rep.setType(CredentialRepresentation.SECRET);
             rep.setValue(secret);
 
-            if (!(boolean) session.getAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED)){
+            if (!Boolean.TRUE.equals(session.removeAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED))){
                 logger.debugv("Removing the previous rotation info for client {0}{1}, if there is",client.getClientId(),client.getName());
                 OIDCClientSecretConfigWrapper.fromClientModel(client).removeClientSecretRotationInfo();
             }
 
             adminEvent.operation(OperationType.ACTION).resourcePath(session.getContext().getUri()).representation(rep).success();
-            session.removeAttribute(ClientSecretConstants.CLIENT_SECRET_ROTATION_ENABLED);
             rep.setValue(secret);
             return rep;
         } catch (ClientPolicyException cpe) {
@@ -319,12 +353,13 @@ public class ClientResource {
     public ClientRepresentation regenerateRegistrationAccessToken() {
         auth.clients().requireManage(client);
 
-        String token = ClientRegistrationTokenUtils.updateRegistrationAccessToken(session, realm, client, RegistrationAuth.AUTHENTICATED);
+        String token = ClientRegistrationTokenUtils.updateRegistrationAccessToken(session, realm, client, RegistrationAuth.AUTHENTICATED, null);
 
         ClientRepresentation rep = ModelToRepresentation.toRepresentation(client, session);
         rep.setRegistrationAccessToken(token);
 
         adminEvent.operation(OperationType.ACTION).resourcePath(session.getContext().getUri()).representation(rep).success();
+        rep.setRegistrationAccessToken(token); // Reset again to the "real" value. In the admin event, it is masked
         return rep;
     }
 
@@ -340,11 +375,10 @@ public class ClientResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
     @Operation( summary = "Get the client secret")
     public CredentialRepresentation getClientSecret() {
-        auth.clients().requireView(client);
+        auth.clients().requireManage(client);
 
         logger.debug("getClientSecret");
         UserCredentialModel model = UserCredentialModel.secret(client.getSecret());
-        if (model == null) throw new NotFoundException("Client does not have a secret");
         return ModelToRepresentation.toRepresentation(model);
     }
 
@@ -367,7 +401,7 @@ public class ClientResource {
 
 
     /**
-     * Get default client scopes.  Only name and ids are returned.
+     * Get default client scopes, including their names, IDs, descriptions, and parameterized scope flags.
      *
      * @return
      */
@@ -376,7 +410,7 @@ public class ClientResource {
     @Produces(MediaType.APPLICATION_JSON)
     @Path("default-client-scopes")
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
-    @Operation( summary = "Get default client scopes.  Only name and ids are returned.")
+    @Operation( summary = "Get default client scopes, including their names, IDs, descriptions, and parameterized scope flags.")
     public Stream<ClientScopeRepresentation> getDefaultClientScopes() {
         return getDefaultClientScopes(true);
     }
@@ -385,6 +419,21 @@ public class ClientResource {
         auth.clients().requireView(client);
 
         return client.getClientScopes(defaultScope).values().stream().map(ClientResource::toRepresentation);
+    }
+
+    /**
+     * Get summaries of client scopes that can be assigned to this client.
+     */
+    @GET
+    @NoCache
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("available-client-scopes")
+    @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
+    @Operation(summary = "Get summaries of client scopes that can be assigned to this client")
+    public Stream<ClientScopeRepresentation> getAvailableClientScopes() {
+        auth.clients().requireManage(client);
+
+        return realm.getClientScopesStream().map(ClientResource::toRepresentation);
     }
 
 
@@ -404,9 +453,15 @@ public class ClientResource {
         if (clientScope == null) {
             throw new jakarta.ws.rs.NotFoundException("Client scope not found");
         }
-        if (defaultScope && clientScope.isDynamicScope()) {
-            throw new ErrorResponseException("invalid_request", "Can't assign a Dynamic Scope to a Client as a Default Scope", Response.Status.BAD_REQUEST);
+
+        // Parameterized scopes currently require the caller to explicitly provide the scope parameter (e.g. "scope_name:value"),
+        // so they cannot be included automatically as default scopes. This restriction may be lifted in the future.
+        if (defaultScope && clientScope.isParameterizedScope()) {
+            throw new ErrorResponseException("invalid_request", "Can't assign a Parameterized Scope to a Client as a Default Scope", Response.Status.BAD_REQUEST);
         }
+
+        validateClientScopeAssignment(session, clientScope, defaultScope, realm, false);
+
         client.addClientScope(clientScope, defaultScope);
 
         adminEvent.operation(OperationType.CREATE).resource(ResourceType.CLIENT_SCOPE_CLIENT_MAPPING).resourcePath(session.getContext().getUri()).success();
@@ -425,6 +480,7 @@ public class ClientResource {
         if (clientScope == null) {
             throw new jakarta.ws.rs.NotFoundException("Client scope not found");
         }
+
         client.removeClientScope(clientScope);
 
         adminEvent.operation(OperationType.DELETE).resource(ResourceType.CLIENT_SCOPE_CLIENT_MAPPING).resourcePath(session.getContext().getUri()).success();
@@ -432,7 +488,7 @@ public class ClientResource {
 
 
     /**
-     * Get optional client scopes.  Only name and ids are returned.
+     * Get optional client scopes, including their names, IDs, descriptions, and parameterized scope flags.
      *
      * @return
      */
@@ -441,7 +497,7 @@ public class ClientResource {
     @Produces(MediaType.APPLICATION_JSON)
     @Path("optional-client-scopes")
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
-    @Operation( summary = "Get optional client scopes.  Only name and ids are returned.")
+    @Operation( summary = "Get optional client scopes, including their names, IDs, descriptions, and parameterized scope flags.")
     public Stream<ClientScopeRepresentation> getOptionalClientScopes() {
         return getDefaultClientScopes(false);
     }
@@ -467,33 +523,6 @@ public class ClientResource {
     @Path("evaluate-scopes")
     public ClientScopeEvaluateResource clientScopeEvaluateResource() {
         return new ClientScopeEvaluateResource(session, session.getContext().getUri(), realm, auth, client, clientConnection);
-    }
-
-    /**
-     * Get a user dedicated to the service account
-     *
-     * @return
-     */
-    @Path("service-account-user")
-    @GET
-    @NoCache
-    @Produces(MediaType.APPLICATION_JSON)
-    @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
-    @Operation( summary = "Get a user dedicated to the service account")
-    public UserRepresentation getServiceAccountUser() {
-        auth.clients().requireView(client);
-
-        UserModel user = session.users().getServiceAccount(client);
-        if (user == null) {
-            if (client.isServiceAccountsEnabled()) {
-                new ClientManager(new RealmManager(session)).enableServiceAccount(client);
-                user = session.users().getServiceAccount(client);
-            } else {
-                throw new BadRequestException("Service account not enabled for the client '" + client.getClientId() + "'");
-            }
-        }
-
-        return ModelToRepresentation.toRepresentation(session, realm, user);
     }
 
     /**
@@ -553,14 +582,14 @@ public class ClientResource {
     @NoCache
     @Produces(MediaType.APPLICATION_JSON)
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
-    @Operation( summary = "Get user sessions for client Returns a list of user sessions associated with this client\n")
-    public Stream<UserSessionRepresentation> getUserSessions(@Parameter(description = "Paging offset") @QueryParam("first") Integer firstResult, @Parameter(description = "Maximum results size (defaults to 100)") @QueryParam("max") Integer maxResults) {
+    @Operation( summary = "Get user sessions for client. Returns a list of user sessions associated with this client.\n")
+    public Stream<UserSessionRepresentation> getUserSessions(@Parameter(description = "Paging offset") @QueryParam("first") Integer firstResult, @Parameter(description = "Maximum results size.") @QueryParam("max") @DefaultValue(Constants.DEFAULT_MAX_RESULTS_STR) Integer maxResults) {
         auth.clients().requireView(client);
-
-        firstResult = firstResult != null ? firstResult : -1;
-        maxResults = maxResults != null ? maxResults : Constants.DEFAULT_MAX_RESULTS;
-        return session.sessions().getUserSessionsStream(client.getRealm(), client, firstResult, maxResults)
-                .map(ModelToRepresentation::toRepresentation);
+        return paginatedStream(session.sessions()
+                        .readOnlyStreamUserSessions(client.getRealm(), client, -1, -1)
+                        .filter(userSession -> auth.users().canView(userSession.getUser())),
+                computeFirstResult(firstResult), computeMaxResults(maxResults))
+                .map(userSession -> ModelToRepresentation.toRepresentation(userSession, this::canViewClient));
     }
 
     /**
@@ -602,14 +631,13 @@ public class ClientResource {
     @NoCache
     @Produces(MediaType.APPLICATION_JSON)
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
-    @Operation( summary = "Get offline sessions for client Returns a list of offline user sessions associated with this client")
-    public Stream<UserSessionRepresentation> getOfflineUserSessions(@Parameter(description = "Paging offset") @QueryParam("first") Integer firstResult, @Parameter(description = "Maximum results size (defaults to 100)") @QueryParam("max") Integer maxResults) {
+    @Operation( summary = "Get offline sessions for client. Returns a list of offline user sessions associated with this client")
+    public Stream<UserSessionRepresentation> getOfflineUserSessions(@Parameter(description = "Paging offset") @QueryParam("first") Integer firstResult, @Parameter(description = "Maximum results size.") @QueryParam("max") @DefaultValue(Constants.DEFAULT_MAX_RESULTS_STR) Integer maxResults) {
         auth.clients().requireView(client);
-
-        firstResult = firstResult != null ? firstResult : -1;
-        maxResults = maxResults != null ? maxResults : Constants.DEFAULT_MAX_RESULTS;
-
-        return session.sessions().getOfflineUserSessionsStream(client.getRealm(), client, firstResult, maxResults)
+        return paginatedStream(session.sessions()
+                        .readOnlyStreamOfflineUserSessions(client.getRealm(), client, -1, -1)
+                        .filter(userSession -> auth.users().canView(userSession.getUser())),
+                computeFirstResult(firstResult), computeMaxResults(maxResults))
                 .map(this::toUserSessionRepresentation);
     }
 
@@ -627,15 +655,24 @@ public class ClientResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
     @Operation( summary = "Register a cluster node with the client Manually register cluster node to this client - usually it’s not needed to call this directly as adapter should handle by sending registration request to Keycloak")
     @APIResponse(responseCode = "204", description = "No Content")
+    @APIResponse(responseCode = "400", description = "Bad Request - node hostname is missing, contains reserved characters, or is rejected by client policy")
     public void registerNode(Map<String, String> formParams) {
         auth.clients().requireConfigure(client);
 
         String node = formParams.get("node");
-        if (node == null) {
-            throw new BadRequestException("Node not found in params");
+        if (node == null || node.isBlank()) {
+            throw new BadRequestException("Node hostname is missing or blank");
         }
 
         ReservedCharValidator.validate(node);
+
+        try {
+            session.clientPolicy().triggerOnEvent(
+                    new ClientNodeRegistrationContext(client, List.of(node),
+                            ClientPolicyEvent.REGISTER_NODE));
+        } catch (ClientPolicyException cpe) {
+            throw new ErrorResponseException(cpe.getError(), cpe.getErrorDetail(), Response.Status.BAD_REQUEST);
+        }
 
         logger.debugf("Register node: %s", node);
         client.registerNode(node, Time.currentTime());
@@ -767,11 +804,13 @@ public class ClientResource {
 
             logger.debug("delete rotated secret");
 
+            // Always remove rotated secret attributes even when the feature is disabled,
+            // so stale secrets cannot become valid again if the feature is re-enabled.
             OIDCClientSecretConfigWrapper wrapper = OIDCClientSecretConfigWrapper.fromClientModel(client);
 
             CredentialRepresentation rep = new CredentialRepresentation();
             rep.setType(CredentialRepresentation.SECRET);
-            rep.setValue(wrapper.getClientRotatedSecret());
+            rep.setValue(wrapper.getClientRotatedSecret(session));
 
             adminEvent.operation(OperationType.DELETE).resourcePath(session.getContext().getUri()).representation(rep).success();
 
@@ -796,30 +835,20 @@ public class ClientResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.CLIENTS)
     @Operation( summary = "Get the rotated client secret")
     public CredentialRepresentation getClientRotatedSecret() {
-        auth.clients().requireView(client);
+        auth.clients().requireManage(client);
 
         logger.debug("getClientRotatedSecret");
         OIDCClientSecretConfigWrapper wrapper = OIDCClientSecretConfigWrapper.fromClientModel(client);
         if (!wrapper.hasRotatedSecret())
             throw new NotFoundException("Client does not have a rotated secret");
         else {
-            UserCredentialModel model = UserCredentialModel.secret(wrapper.getClientRotatedSecret());
+            UserCredentialModel model = UserCredentialModel.secret(wrapper.getClientRotatedSecret(session));
             return ModelToRepresentation.toRepresentation(model);
         }
     }
 
     private void updateClientFromRep(ClientRepresentation rep, ClientModel client, KeycloakSession session) throws ModelDuplicateException {
-        UserModel serviceAccount = this.session.users().getServiceAccount(client);
-        boolean serviceAccountScopeAssigned = client.getClientScopes(true).containsKey(ServiceAccountConstants.SERVICE_ACCOUNT_SCOPE);
-        if (Boolean.TRUE.equals(rep.isServiceAccountsEnabled())) {
-            if (serviceAccount == null || !serviceAccountScopeAssigned) {
-                new ClientManager(new RealmManager(session)).enableServiceAccount(client);
-            }
-        } else if (Boolean.FALSE.equals(rep.isServiceAccountsEnabled()) || !client.isServiceAccountsEnabled()) {
-            if (serviceAccount != null || serviceAccountScopeAssigned) {
-                new ClientManager(new RealmManager(session)).disableServiceAccount(client);
-            }
-        }
+        updateClientServiceAccount(session, client, rep.isServiceAccountsEnabled());
 
         if (rep.getClientId() != null && !rep.getClientId().equals(client.getClientId())) {
             new ClientManager(new RealmManager(session)).clientIdChanged(client, rep);
@@ -832,15 +861,67 @@ public class ClientResource {
         if ((rep.isBearerOnly() != null && rep.isBearerOnly()) || (rep.isPublicClient() != null && rep.isPublicClient())) {
             rep.setAuthorizationServicesEnabled(false);
         }
+        
+        try {
+            if (rep.getRegisteredNodes() != null && !rep.getRegisteredNodes().isEmpty()) {
+                // Only validate hostnames that are not already stored in the model.
+                Set<String> existingNodes = Optional.ofNullable(client.getRegisteredNodes())
+                        .map(Map::keySet)
+                        .orElse(Set.of());
+                List<String> newNodes = rep.getRegisteredNodes().keySet().stream()
+                        .filter(h -> !existingNodes.contains(h))
+                        .toList();
+                if (!newNodes.isEmpty()) {
+                    session.clientPolicy().triggerOnEvent(
+                            new ClientNodeRegistrationContext(client, newNodes,
+                                    ClientPolicyEvent.REGISTER_NODE));
+                }
+            }
+        } catch (ClientPolicyException e) {
+            throw new ErrorResponseException(
+                    e.getError(),
+                    e.getErrorDetail(),
+                    Response.Status.BAD_REQUEST);
+        }
 
         RepresentationToModel.updateClient(rep, client, session);
         RepresentationToModel.updateClientProtocolMappers(rep, client);
         updateAuthorizationSettings(rep);
     }
 
+    /**
+     * Validates client scope assignment using protocol-specific validation if available.
+     *
+     * @param session      the Keycloak session
+     * @param clientScope  the client scope to be assigned
+     * @param defaultScope true if assigning as Default scope, false if Optional
+     * @param realm        the realm where the assignment is happening
+     * @param realmLevel   true if the scope is assigned as a realm default/optional client scope,
+     *                     false if it is assigned to a specific client
+     */
+    public static void validateClientScopeAssignment(KeycloakSession session, ClientScopeModel clientScope,
+                                                     boolean defaultScope, RealmModel realm, boolean realmLevel) {
+        LoginProtocolFactory loginProtocolFactory = (LoginProtocolFactory) session.getKeycloakSessionFactory()
+                .getProviderFactory(LoginProtocol.class, clientScope.getProtocol());
+        if (loginProtocolFactory != null) {
+            loginProtocolFactory.validateClientScopeAssignment(session, clientScope, defaultScope, realm, realmLevel);
+        }
+    }
+
+    public static void updateClientServiceAccount(KeycloakSession session, ClientModel client, Boolean isServiceAccountEnabled) {
+        ClientManager.updateClientServiceAccount(session, client, isServiceAccountEnabled);
+    }
+
     private void updateAuthorizationSettings(ClientRepresentation rep) {
         if (Profile.isFeatureEnabled(Profile.Feature.AUTHORIZATION)) {
             if (Boolean.TRUE.equals(rep.getAuthorizationServicesEnabled())) {
+                if (Profile.isFeatureEnabled(Profile.Feature.CLIENT_TYPES) && client.getType() != null) {
+                    ClientType clientType = session.getProvider(ClientTypeManager.class).getClientType(realm, client.getType());
+                    if (!clientType.isApplicable("authorizationServicesEnabled") ||
+                            Boolean.FALSE.equals(clientType.getTypeValue("authorizationServicesEnabled", Boolean.class))) {
+                        throw ClientTypeException.Message.CLIENT_UPDATE_FAILED_CLIENT_TYPE_VALIDATION.exception("authorizationServicesEnabled");
+                    }
+                }
                 authorization().enable(false);
             } else {
                 authorization().disable();
@@ -855,22 +936,39 @@ public class ClientResource {
      * @return a reference to the constructed representation.
      */
     private UserSessionRepresentation toUserSessionRepresentation(final UserSessionModel userSession) {
-        UserSessionRepresentation rep = ModelToRepresentation.toRepresentation(userSession);
+        UserSessionRepresentation rep = ModelToRepresentation.toRepresentation(userSession, this::canViewClient);
 
         // Update lastSessionRefresh with the timestamp from clientSession
-        Map.Entry<String, AuthenticatedClientSessionModel> result = userSession.getAuthenticatedClientSessions().entrySet().stream()
-                .filter(entry -> Objects.equals(client.getId(), entry.getKey()))
-                .findFirst().orElse(null);
-        if (result != null) {
-            rep.setLastAccess(Time.toMillis(result.getValue().getTimestamp()));
+        var clientSession = userSession.getAuthenticatedClientSessionByClient(client.getClientId());
+        if (clientSession != null) {
+            rep.setLastAccess(Time.toMillis(clientSession.getTimestamp()));
         }
         return rep;
+    }
+
+    /**
+     * Checks client view permission once per client for this request, as session listings repeat the same clients.
+     */
+    private boolean canViewClient(ClientModel client) {
+        return clientVisibility.computeIfAbsent(client.getId(), id -> auth.clients().canView(client));
     }
 
     private static ClientScopeRepresentation toRepresentation(ClientScopeModel clientScopeModel) {
         ClientScopeRepresentation rep = new ClientScopeRepresentation();
         rep.setId(clientScopeModel.getId());
         rep.setName(clientScopeModel.getName());
+        rep.setProtocol(clientScopeModel.getProtocol());
+        rep.setDescription(clientScopeModel.getDescription());
+        // Assigned scope summaries only expose the attribute needed to display the scope type.
+        rep.setAttributes(Map.of(ClientScopeModel.IS_PARAMETERIZED_SCOPE, Boolean.toString(clientScopeModel.isParameterizedScope())));
         return rep;
+    }
+
+    private static int computeFirstResult(Integer firstResult) {
+        return Objects.requireNonNullElse(firstResult, -1);
+    }
+
+    private static int computeMaxResults(Integer maxResults) {
+        return Objects.requireNonNullElse(maxResults, Constants.DEFAULT_MAX_RESULTS);
     }
 }

@@ -17,38 +17,6 @@
 
 package org.keycloak.tests.admin.authentication;
 
-import jakarta.ws.rs.BadRequestException;
-import jakarta.ws.rs.ClientErrorException;
-import jakarta.ws.rs.InternalServerErrorException;
-import jakarta.ws.rs.NotFoundException;
-import jakarta.ws.rs.WebApplicationException;
-import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.Response.Status;
-import org.hamcrest.MatcherAssert;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
-import org.keycloak.admin.client.CreatedResponseUtil;
-import org.keycloak.admin.client.resource.ClientResource;
-import org.keycloak.admin.client.resource.IdentityProviderResource;
-import org.keycloak.authentication.authenticators.browser.IdentityProviderAuthenticatorFactory;
-import org.keycloak.common.util.StreamUtil;
-import org.keycloak.events.admin.OperationType;
-import org.keycloak.events.admin.ResourceType;
-import org.keycloak.models.utils.DefaultAuthenticationFlows;
-import org.keycloak.representations.idm.AdminEventRepresentation;
-import org.keycloak.representations.idm.AuthenticationExecutionExportRepresentation;
-import org.keycloak.representations.idm.AuthenticationExecutionInfoRepresentation;
-import org.keycloak.representations.idm.AuthenticationFlowRepresentation;
-import org.keycloak.representations.idm.AuthenticatorConfigRepresentation;
-import org.keycloak.representations.idm.ClientRepresentation;
-import org.keycloak.representations.idm.IdentityProviderRepresentation;
-import org.keycloak.representations.idm.OAuth2ErrorRepresentation;
-import org.keycloak.representations.idm.RealmRepresentation;
-import org.keycloak.testframework.annotations.KeycloakIntegrationTest;
-import org.keycloak.testframework.events.AdminEventAssertion;
-import org.keycloak.tests.utils.admin.AdminEventPaths;
-import org.keycloak.tests.utils.admin.ApiUtil;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -62,6 +30,43 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ClientErrorException;
+import jakarta.ws.rs.InternalServerErrorException;
+import jakarta.ws.rs.NotFoundException;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response.Status;
+
+import org.keycloak.admin.client.CreatedResponseUtil;
+import org.keycloak.admin.client.resource.ClientResource;
+import org.keycloak.admin.client.resource.IdentityProviderResource;
+import org.keycloak.authentication.authenticators.browser.IdentityProviderAuthenticatorFactory;
+import org.keycloak.common.util.StreamUtil;
+import org.keycloak.events.admin.OperationType;
+import org.keycloak.events.admin.ResourceType;
+import org.keycloak.models.utils.DefaultAuthenticationFlows;
+import org.keycloak.representations.idm.AuthenticationExecutionExportRepresentation;
+import org.keycloak.representations.idm.AuthenticationExecutionInfoRepresentation;
+import org.keycloak.representations.idm.AuthenticationFlowRepresentation;
+import org.keycloak.representations.idm.AuthenticatorConfigRepresentation;
+import org.keycloak.representations.idm.ClientRepresentation;
+import org.keycloak.representations.idm.IdentityProviderRepresentation;
+import org.keycloak.representations.idm.OAuth2ErrorRepresentation;
+import org.keycloak.representations.idm.RealmRepresentation;
+import org.keycloak.testframework.annotations.KeycloakIntegrationTest;
+import org.keycloak.testframework.events.AdminEventAssertion;
+import org.keycloak.testframework.util.ApiUtil;
+import org.keycloak.tests.suites.DatabaseTest;
+import org.keycloak.tests.utils.admin.AdminEventPaths;
+
+import org.hamcrest.MatcherAssert;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import static org.keycloak.tests.utils.matchers.Matchers.body;
+import static org.keycloak.tests.utils.matchers.Matchers.statusCodeIs;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.endsWith;
@@ -69,8 +74,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.fail;
-import static org.keycloak.tests.utils.matchers.Matchers.body;
-import static org.keycloak.tests.utils.matchers.Matchers.statusCodeIs;
 
 /**
  * @author <a href="mailto:mstrukel@redhat.com">Marko Strukelj</a>
@@ -120,6 +123,7 @@ public class FlowTest extends AbstractAuthenticationTest {
         addFlowToParent("child", "grandchild");
     }
 
+
     private void addFlowToParent(String parentAlias, String childAlias) {
         Map<String, Object> data = new HashMap<>();
         data.put("alias", childAlias);
@@ -142,6 +146,7 @@ public class FlowTest extends AbstractAuthenticationTest {
     }
 
     @Test
+    @DatabaseTest
     public void testAddRemoveFlow() {
 
         // test that built-in flow cannot be deleted
@@ -374,6 +379,19 @@ public class FlowTest extends AbstractAuthenticationTest {
     }
 
     @Test
+    public void testCopyFlowWithRestrictedCharInAlias() {
+        HashMap<String, Object> params = new HashMap<>();
+        params.put("newName", "copy/of(browser)");
+
+        try (Response response = authMgmtResource.copy("browser", params)) {
+            Assertions.assertEquals(400, response.getStatus());
+            OAuth2ErrorRepresentation error = response.readEntity(OAuth2ErrorRepresentation.class);
+            Assertions.assertEquals("Character '/' not allowed.", error.getError());
+        }
+    }
+
+    @Test
+    @DatabaseTest
     public void testCopyFlow() {
 
         HashMap<String, Object> params = new HashMap<>();
@@ -431,6 +449,7 @@ public class FlowTest extends AbstractAuthenticationTest {
     }
 
     @Test
+    @DatabaseTest
     // KEYCLOAK-2580
     public void addExecutionFlow() {
         HashMap<String, Object> params = new HashMap<>();
@@ -533,6 +552,7 @@ public class FlowTest extends AbstractAuthenticationTest {
     }
 
     @Test
+    @DatabaseTest
     public void editExecutionFlowTest() {
         HashMap<String, Object> params = new HashMap<>();
         List<AuthenticationExecutionInfoRepresentation> executionReps;
@@ -711,6 +731,51 @@ public class FlowTest extends AbstractAuthenticationTest {
     }
 
     @Test
+    public void testUpdateFlowCannotChangeBuiltInOrTopLevelFlags() {
+        List<AuthenticationFlowRepresentation> flows = authMgmtResource.getFlows();
+
+        // builtIn flag: changing it must be rejected with 400
+        AuthenticationFlowRepresentation builtInFlow = flows.stream()
+                .filter(AuthenticationFlowRepresentation::isBuiltIn).findFirst().orElse(null);
+        Assertions.assertNotNull(builtInFlow, "There is no built-in flow in the realm");
+
+        String originalBuiltInAlias = builtInFlow.getAlias();
+        builtInFlow.setBuiltIn(false);
+        builtInFlow.setAlias("should-not-be-persisted");
+        BadRequestException e = Assertions.assertThrows(BadRequestException.class,
+                () -> authMgmtResource.updateFlow(builtInFlow.getId(), builtInFlow));
+        OAuth2ErrorRepresentation error = e.getResponse().readEntity(OAuth2ErrorRepresentation.class);
+        Assertions.assertEquals("The authentication flow builtIn attribute cannot be changed", error.getError());
+        // alias must not have been mutated in the stored/cached flow
+        Assertions.assertEquals(originalBuiltInAlias, authMgmtResource.getFlow(builtInFlow.getId()).getAlias());
+
+        // topLevel flag: use a freshly created non-built-in top-level flow.
+        // Call the resource directly to avoid asserting the CREATE admin event here.
+        Response createResp = authMgmtResource.createFlow(newFlow("TopLevelTest", "Top level test flow", "basic-flow", true, false));
+        String id = ApiUtil.getCreatedId(createResp);
+        createResp.close();
+        managedRealm.cleanup().add(r -> r.flows().deleteFlow(id));
+        AuthenticationFlowRepresentation topLevelFlow = authMgmtResource.getFlow(id);
+        topLevelFlow.setTopLevel(false);
+        topLevelFlow.setAlias("should-not-be-persisted");
+        e = Assertions.assertThrows(BadRequestException.class,
+                () -> authMgmtResource.updateFlow(topLevelFlow.getId(), topLevelFlow));
+        error = e.getResponse().readEntity(OAuth2ErrorRepresentation.class);
+        Assertions.assertEquals("The authentication flow topLevel attribute cannot be changed", error.getError());
+        // alias must not have been mutated in the stored/cached flow
+        Assertions.assertEquals("TopLevelTest", authMgmtResource.getFlow(topLevelFlow.getId()).getAlias());
+    }
+
+    @Test
+    public void testCreateFlowCannotBeBuiltIn() {
+        try (Response response = authMgmtResource.createFlow(newFlow("ShouldFail", "Should not be created", "basic-flow", true, true))) {
+            Assertions.assertEquals(400, response.getStatus());
+            OAuth2ErrorRepresentation error = response.readEntity(OAuth2ErrorRepresentation.class);
+            Assertions.assertEquals("It is not allowed to create a built-in flow", error.getError());
+        }
+    }
+
+    @Test
     public void testExecutionConfigDuplicated() {
         AuthenticationFlowRepresentation existingFlow = null;
 
@@ -736,7 +801,7 @@ public class FlowTest extends AbstractAuthenticationTest {
         AuthenticatorConfigRepresentation executionConfig = new AuthenticatorConfigRepresentation();
 
         executionConfig.setAlias("test-execution-config");
-        executionConfig.setConfig(Map.of("key", "value"));
+        executionConfig.setConfig(Map.of("site.key", "value"));
 
         try (Response response = authMgmtResource.newExecutionConfig(executionWithConfig.getId(), executionConfig)) {
             managedRealm.cleanup().add(r -> r.flows().removeAuthenticatorConfig(ApiUtil.getCreatedId(response)));

@@ -1,11 +1,11 @@
-import { test } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { switchOff, switchOn } from "../utils/form";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { goToIdentityProviders } from "../utils/sidebar";
-import { clickTableRowItem } from "../utils/table";
+import adminClient from "../utils/AdminClient.ts";
+import { switchOn } from "../utils/form.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { goToIdentityProviders } from "../utils/sidebar.ts";
+import { clickTableRowItem } from "../utils/table.ts";
 import {
   addMapper,
   assertAuthorizationUrl,
@@ -19,10 +19,11 @@ import {
   clickSaveMapper,
   createOIDCProvider,
   goToMappersTab,
+  reenterClientSecret,
   setUrl,
-} from "./main";
+} from "./main.ts";
 
-test.describe("OIDC identity provider test", () => {
+test.describe.serial("OIDC identity provider test", () => {
   const oidcProviderName = "oidc";
   const secret = "123";
 
@@ -47,14 +48,23 @@ test.describe("OIDC identity provider test", () => {
     await clickSaveButton(page);
     await assertInvalidUrlNotification(page, "authorization");
     await clickRevertButton(page);
+    await assertAuthorizationUrl(page);
 
+    // Changing token destination fields clears the masked client secret; re-enter it to save.
     await setUrl(page, "token", "invalid");
+    await reenterClientSecret(page, secret);
     await clickSaveButton(page);
     await assertInvalidUrlNotification(page, "token");
     await clickRevertButton(page);
 
+    await setUrl(page, "tokenIntrospection", "invalid");
+    await reenterClientSecret(page, secret);
+    await clickSaveButton(page);
+    await assertInvalidUrlNotification(page, "tokenIntrospection");
+    await clickRevertButton(page);
+
     await assertJwksUrlExists(page);
-    await switchOff(page, "#config\\.useJwksUrl");
+    await page.getByText("Use JWKS URL").click();
     await assertJwksUrlExists(page, false);
 
     await assertPkceMethodExists(page, false);
@@ -62,11 +72,17 @@ test.describe("OIDC identity provider test", () => {
     await assertPkceMethodExists(page);
 
     await clickSaveButton(page);
+    await expect(page.getByText("Required field")).toBeVisible();
+
+    await switchOn(page, "#config\\.useJwksUrl");
+    await assertJwksUrlExists(page, true);
+    await clickSaveButton(page);
+
     await assertNotificationMessage(page, "Provider successfully updated");
   });
 });
 
-test.describe("Edit OIDC Provider", () => {
+test.describe.serial("Edit OIDC Provider", () => {
   const oidcProviderName = "OpenID Connect v1.0";
   const alias = `edit-oidc-${uuid()}`;
 
@@ -82,17 +98,27 @@ test.describe("Edit OIDC Provider", () => {
   test("should add OIDC mapper of type Attribute Importer", async ({
     page,
   }) => {
+    const mapperName = "OIDC Attribute Importer";
     await goToMappersTab(page);
-    await addMapper(page, "oidc-user-attribute", "OIDC Attribute Importer");
+    await addMapper(page, "oidc-user-attribute", mapperName);
     await clickSaveMapper(page);
-    await assertNotificationMessage(page, "Mapper created successfully.");
+    await expect(
+      page.getByRole("row", {
+        name: new RegExp(mapperName, "i"),
+      }),
+    ).toBeVisible();
   });
 
   test("should add OIDC mapper of type Claim To Role", async ({ page }) => {
+    const mapperName = "OIDC Claim to Role";
     await goToMappersTab(page);
-    await addMapper(page, "oidc-role", "OIDC Claim to Role");
+    await addMapper(page, "oidc-role", mapperName);
     await clickSaveMapper(page);
-    await assertNotificationMessage(page, "Mapper created successfully.");
+    await expect(
+      page.getByRole("row", {
+        name: new RegExp(mapperName, "i"),
+      }),
+    ).toBeVisible();
   });
 
   test("should cancel the addition of the OIDC mapper", async ({ page }) => {

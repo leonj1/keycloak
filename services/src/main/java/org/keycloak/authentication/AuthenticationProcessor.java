@@ -17,11 +17,22 @@
 
 package org.keycloak.authentication;
 
+import java.io.IOException;
+import java.net.URI;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import jakarta.ws.rs.core.MultivaluedHashMap;
 import jakarta.ws.rs.core.MultivaluedMap;
-import org.jboss.logging.Logger;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.core.UriInfo;
+
 import org.keycloak.OAuth2Constants;
-import org.keycloak.authentication.authenticators.util.AcrStore;
-import org.keycloak.http.HttpRequest;
 import org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAuthenticator;
 import org.keycloak.authentication.authenticators.client.ClientAuthUtil;
 import org.keycloak.common.ClientConnection;
@@ -30,6 +41,7 @@ import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.forms.login.LoginFormsProvider;
+import org.keycloak.http.HttpRequest;
 import org.keycloak.models.AuthenticationExecutionModel;
 import org.keycloak.models.AuthenticationFlowModel;
 import org.keycloak.models.AuthenticatorConfigModel;
@@ -52,32 +64,22 @@ import org.keycloak.services.ErrorPage;
 import org.keycloak.services.ErrorPageException;
 import org.keycloak.services.ServicesLogger;
 import org.keycloak.services.managers.AuthenticationManager;
+import org.keycloak.services.managers.AuthenticationSessionManager;
 import org.keycloak.services.managers.BruteForceProtector;
 import org.keycloak.services.managers.ClientSessionCode;
 import org.keycloak.services.managers.UserSessionManager;
-import org.keycloak.services.managers.AuthenticationSessionManager;
 import org.keycloak.services.messages.Messages;
 import org.keycloak.services.resources.LoginActionsService;
-import org.keycloak.services.util.CacheControlUtil;
 import org.keycloak.services.util.AuthenticationFlowURLHelper;
+import org.keycloak.services.util.CacheControlUtil;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.sessions.CommonClientSessionModel;
 import org.keycloak.sessions.RootAuthenticationSessionModel;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.util.TokenUtil;
-
-import jakarta.ws.rs.core.MultivaluedHashMap;
-import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.UriBuilder;
-import jakarta.ws.rs.core.UriInfo;
 import org.keycloak.utils.StringUtil;
 
-import java.io.IOException;
-import java.net.URI;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import org.jboss.logging.Logger;
 
 import static org.keycloak.models.light.LightweightUserAdapter.isLightweightUser;
 
@@ -90,12 +92,13 @@ public class AuthenticationProcessor {
     public static final String LAST_PROCESSED_EXECUTION = "last.processed.execution";
     public static final String CURRENT_FLOW_PATH = "current.flow.path";
     public static final String FORKED_FROM = "forked.from";
+    public static final String AUTHN_CREDENTIALS = "authn.credentials";
 
     public static final String BROKER_SESSION_ID = "broker.session.id";
     public static final String BROKER_USER_ID = "broker.user.id";
     public static final String FORWARDED_PASSIVE_LOGIN = "forwarded.passive.login";
 
-    // Boolean flag, which is true when authentication-selector screen should be rendered (typically displayed when user clicked on 'try another way' link)
+    // Flag with the model id when authentication-selector screen should be rendered (typically displayed when user clicked on 'try another way' link)
     public static final String AUTHENTICATION_SELECTOR_SCREEN_DISPLAYED = "auth.selector.screen.rendered";
 
     // Boolean note in the client session indicating it was first created for offline session
@@ -342,6 +345,7 @@ public class AuthenticationProcessor {
         List<AuthenticationSelectionOption> authenticationSelections;
         String eventDetails;
         String userErrorMessage;
+        Map<Class<?>, Object> state;
 
         private Result(AuthenticationExecutionModel execution, Authenticator authenticator, List<AuthenticationExecutionModel> currentExecutions) {
             this.execution = execution;
@@ -406,6 +410,14 @@ public class AuthenticationProcessor {
 
         @Override
         public void success() {
+            success(null);
+        }
+
+        @Override
+        public void success(String credentialType) {
+            if (credentialType != null) {
+                AuthenticatorUtil.addAuthCredential(getAuthenticationSession(), credentialType);
+            }
             this.status = FlowStatus.SUCCESS;
         }
 
@@ -506,6 +518,22 @@ public class AuthenticationProcessor {
         @Override
         public Map<String, String> getClientAuthAttributes() {
             return AuthenticationProcessor.this.getClientAuthAttributes();
+        }
+
+        @Override
+        public <T> T getState(Class<T> type, ClientAuthenticationFlowContextSupplier<T> supplier) throws Exception {
+            if (state == null) {
+                state = new HashMap<>();
+            }
+
+            T value = type.cast(state.get(type));
+
+            if (value == null) {
+                value = supplier.get(this);
+                state.put(type, value);
+            }
+
+            return value;
         }
 
         @Override
@@ -737,11 +765,13 @@ public class AuthenticationProcessor {
         }
     }
 
-    public void logFailure() {
+    public void logFailure(String executionId) {
         if (realm.isBruteForceProtected()) {
             UserModel user = AuthenticationManager.lookupUserForBruteForceLog(session, realm, authenticationSession);
             if (user != null) {
-                getBruteForceProtector().failedLogin(realm, user, connection, session.getContext().getHttpRequest().getUri());
+                getBruteForceProtector().failedLogin(realm, user, connection, session.getContext().getHttpRequest().getUri(),
+                        Optional.ofNullable(AuthenticationManager.getAuthenticationCategory(session, executionId))
+                                .map(Collections::singleton).orElse(null));
             }
         }
     }
@@ -915,15 +945,11 @@ public class AuthenticationProcessor {
             throw new AuthenticationFlowException(AuthenticationFlowError.INTERNAL_ERROR);
         }
         if (flow.getProviderId() == null || flow.getProviderId().equals(AuthenticationFlow.BASIC_FLOW)) {
-            DefaultAuthenticationFlow flowExecution = new DefaultAuthenticationFlow(this, flow);
-            return flowExecution;
-
+            return new DefaultAuthenticationFlow(this, flow);
         } else if (flow.getProviderId().equals(AuthenticationFlow.FORM_FLOW)) {
-            FormAuthenticationFlow flowExecution = new FormAuthenticationFlow(this, execution);
-            return flowExecution;
+            return new FormAuthenticationFlow(this, execution);
         } else if (flow.getProviderId().equals(AuthenticationFlow.CLIENT_FLOW)) {
-            ClientAuthenticationFlow flowExecution = new ClientAuthenticationFlow(this, flow);
-            return flowExecution;
+            return new ClientAuthenticationFlow(this, flow);
         }
         throw new AuthenticationFlowException("Unknown flow provider type", AuthenticationFlowError.INTERNAL_ERROR);
     }
@@ -1039,7 +1065,7 @@ public class AuthenticationProcessor {
         AuthenticationExecutionModel model = realm.getAuthenticationExecutionById(execution);
         if (model == null) {
             logger.debug("Cannot find execution, reseting flow");
-            logFailure();
+            logFailure(null);
             resetFlow();
             return authenticate();
         }
@@ -1156,6 +1182,7 @@ public class AuthenticationProcessor {
                 }
             }
             userSession.setState(UserSessionModel.State.LOGGED_IN);
+            session.getContext().setUserSession(userSession);
         }
 
         if (remember) {
@@ -1208,17 +1235,17 @@ public class AuthenticationProcessor {
     }
 
     protected Response authenticationComplete() {
-        new AcrStore(session, authenticationSession).setAuthFlowLevelAuthenticatedToCurrentRequest();
-
         // attachSession(); // Session will be attached after requiredActions + consents are finished.
         AuthenticationManager.setClientScopesInSession(session, authenticationSession);
 
         String nextRequiredAction = nextRequiredAction();
         if (nextRequiredAction != null) {
-            return AuthenticationManager.redirectToRequiredActions(session, realm, authenticationSession, uriInfo, nextRequiredAction);
+            Response response = AuthenticationManager.redirectToRequiredActions(session, realm, authenticationSession, uriInfo, nextRequiredAction);
+            return response;
         } else {
             event.detail(Details.CODE_ID, authenticationSession.getParentSession().getId());  // todo This should be set elsewhere.  find out why tests fail.  Don't know where this is supposed to be set
-            return AuthenticationManager.finishedRequiredActions(session, authenticationSession, userSession, connection, request, uriInfo, event);
+            Response response = AuthenticationManager.finishedRequiredActions(session, authenticationSession, userSession, connection, request, uriInfo, event);
+            return response;
         }
     }
 

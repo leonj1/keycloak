@@ -19,16 +19,18 @@
 
 package org.keycloak.protocol.oidc.tokenexchange;
 
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.OAuth2Constants;
 import org.keycloak.OAuthErrorException;
 import org.keycloak.authentication.actiontoken.TokenUtils;
 import org.keycloak.common.Profile;
+import org.keycloak.common.VerificationException;
 import org.keycloak.common.util.CollectionUtil;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
@@ -43,13 +45,17 @@ import org.keycloak.protocol.oidc.TokenExchangeContext;
 import org.keycloak.protocol.oidc.TokenManager;
 import org.keycloak.protocol.oidc.encode.AccessTokenContext;
 import org.keycloak.protocol.oidc.encode.TokenContextEncoderProvider;
-import org.keycloak.rar.AuthorizationRequestContext;
 import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.AccessTokenResponse;
+import org.keycloak.representations.IDToken;
+import org.keycloak.representations.dpop.DPoP;
 import org.keycloak.services.CorsErrorResponseException;
+import org.keycloak.services.clientpolicy.ClientPolicyException;
+import org.keycloak.services.clientpolicy.context.TokenExchangeResponseContext;
 import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.managers.AuthenticationSessionManager;
-import org.keycloak.services.util.AuthorizationContextUtil;
+import org.keycloak.services.util.DPoPUtil;
+import org.keycloak.services.util.MtlsHoKTokenUtil;
 import org.keycloak.services.util.UserSessionUtil;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.sessions.RootAuthenticationSessionModel;
@@ -62,10 +68,6 @@ import org.keycloak.util.TokenUtil;
  */
 public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider {
 
-    @Override
-    public int getVersion() {
-        return 2;
-    }
 
     @Override
     public boolean supports(TokenExchangeContext context) {
@@ -117,30 +119,113 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
 
     @Override
     protected Response tokenExchange() {
+        AuthenticationManager.AuthResult authResult = processSubjectToken();
+        return exchangeClientToClient(authResult.user(), authResult.session(), authResult.token(), true);
+    }
+
+    protected AuthenticationManager.AuthResult processSubjectToken() {
+        if (!OAuth2Constants.ACCESS_TOKEN_TYPE.equals(context.getParams().getSubjectTokenType())) {
+            event.detail(Details.REASON, "subject_token_type invalid");
+            event.error(Errors.INVALID_REQUEST);
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST, "Invalid subject token type", Response.Status.BAD_REQUEST);
+        }
 
         String subjectToken = context.getParams().getSubjectToken();
 
         event.detail(Details.REQUESTED_TOKEN_TYPE, context.getParams().getRequestedTokenType());
 
-        AuthenticationManager.AuthResult authResult = AuthenticationManager.verifyIdentityToken(session, realm, session.getContext().getUri(), clientConnection, true, true, null, false, subjectToken, context.getHeaders());
+        AuthenticationManager.AuthResult authResult = AuthenticationManager.verifyIdentityToken(session, realm, session.getContext().getUri(), clientConnection, true, true, null,
+                false, subjectToken, context.getHeaders(), verifier -> {});
         if (authResult == null) {
             event.detail(Details.REASON, "subject_token validation failure");
             event.error(Errors.INVALID_TOKEN);
             throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST, "Invalid token", Response.Status.BAD_REQUEST);
         }
 
-        UserModel tokenUser = authResult.getUser();
-        UserSessionModel tokenSession = authResult.getSession();
-        AccessToken token = authResult.getToken();
+        UserModel tokenUser = authResult.user();
+        UserSessionModel tokenSession = authResult.session();
+        AccessToken token = authResult.token();
+
+        validateSenderConstrainedToken(token);
+        checkMtlsHoKToken();
 
         event.user(tokenUser);
         event.detail(Details.USERNAME, tokenUser.getUsername());
-        if (tokenSession.getPersistenceState() != UserSessionModel.SessionPersistenceState.TRANSIENT) {
+        if (token.getSessionId() != null) {
             event.session(tokenSession);
         }
         event.detail(Details.SUBJECT_TOKEN_CLIENT_ID, token.getIssuedFor());
 
-        return exchangeClientToClient(tokenUser, tokenSession, token, true);
+        validateSubjectToken(token);
+
+        return authResult;
+    }
+
+
+    protected void validateSubjectToken(AccessToken subjectToken) {
+        if (subjectToken.getOtherClaims().containsKey(IDToken.MAY_ACT) || subjectToken.getOtherClaims().containsKey(IDToken.ACT)) {
+            event.detail(Details.REASON, "subject_token with a 'may_act' or 'act' claim is not allowed for standard token exchange");
+            event.error(Errors.INVALID_REQUEST);
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                    "Subject token with a delegation claim is not allowed for standard token exchange", Response.Status.BAD_REQUEST);
+        }
+    }
+
+    protected void validateSenderConstrainedToken(AccessToken token) {
+        if (isSenderConstrainedToken(token)) {
+            // Reject sender-constrained tokens (RFC 7800) as subject_token if client does not match the authorized parties claim
+            if (!token.getIssuedFor().equals(client.getClientId())) {
+                event.detail(Details.REASON, "Sender-constrained token exchange rejected as the token was not issued for the requesting client");
+                event.error(Errors.INVALID_REQUEST);
+                throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                      "Sender-constrained token exchange rejected as the token was not issued for the requesting client",
+                      Response.Status.BAD_REQUEST);
+            }
+
+            AccessToken.Confirmation cnf = token.getConfirmation();
+            // Validate mTLS
+            if (cnf.getCertThumbprint() != null) {
+                if (!MtlsHoKTokenUtil.verifyTokenBindingWithClientCertificate(token, session.getContext().getHttpRequest(), session)) {
+                    throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST, MtlsHoKTokenUtil.CERT_VERIFY_ERROR_DESC, Response.Status.BAD_REQUEST);
+                }
+            }
+            // Validate DPoP
+            if (Profile.isFeatureEnabled(Profile.Feature.DPOP) && cnf.getKeyThumbprint() != null) {
+                DPoP dPoP = session.getAttribute(DPoPUtil.DPOP_SESSION_ATTRIBUTE, DPoP.class);
+                if (dPoP == null) {
+                    event.detail(Details.REASON, "DPoP proof is missing");
+                    event.error(Errors.INVALID_DPOP_PROOF);
+                    throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                          "DPoP proof is missing", Response.Status.BAD_REQUEST);
+                }
+                try {
+                    DPoPUtil.validateBinding(token, dPoP);
+                } catch (VerificationException ex) {
+                    event.detail(Details.REASON, ex.getMessage());
+                    event.error(Errors.INVALID_DPOP_PROOF);
+                    throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST,
+                          ex.getMessage(), Response.Status.BAD_REQUEST);
+                }
+            }
+        }
+    }
+
+    private void checkMtlsHoKToken() {
+        if (OIDCAdvancedConfigWrapper.fromClientModel(client).isUseMtlsHokToken() && MtlsHoKTokenUtil.bindTokenWithClientCertificate(session.getContext().getHttpRequest(), session) == null) {
+            String errorMessage = "Client Certification missing for MTLS HoK Token Binding";
+            event.detail(Details.REASON, errorMessage);
+            event.error(Errors.INVALID_REQUEST);
+            throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST, errorMessage, Response.Status.BAD_REQUEST);
+        }
+    }
+
+    // The exchanged access token is bound to the client certificate by the transient MtlsHoKProtocolMapper, but
+    // TokenManager propagates that binding to the refresh token of public clients only, so it is done here instead.
+    private void bindRefreshTokenWithClientCertificate(TokenManager.AccessTokenResponseBuilder responseBuilder) {
+        AccessToken.Confirmation cnf = responseBuilder.getAccessToken().getConfirmation();
+        if (cnf != null && cnf.getCertThumbprint() != null) {
+            responseBuilder.getRefreshToken().setConfirmation(cnf);
+        }
     }
 
     @Override
@@ -169,8 +254,8 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
         }
     }
 
-    protected void validateConsents(UserModel targetUser, ClientSessionContext clientSessionCtx) {
-        if (!TokenManager.verifyConsentStillAvailable(session, targetUser, client, clientSessionCtx.getClientScopesStream())) {
+    protected void validateConsents(UserModel targetUser, String scope) {
+        if (!TokenManager.verifyConsentStillAvailable(session, targetUser, client, null, scope)) {
             event.detail(Details.REASON, "Missing consents for Token Exchange in client " + client.getClientId());
             event.error(Errors.CONSENT_DENIED);
             throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_SCOPE,
@@ -183,15 +268,7 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
     protected String getRequestedScope(AccessToken token, List<ClientModel> targetAudienceClients) {
         String scope = formParams.getFirst(OAuth2Constants.SCOPE);
 
-        boolean validScopes;
-        if (Profile.isFeatureEnabled(Profile.Feature.DYNAMIC_SCOPES)) {
-            AuthorizationRequestContext authorizationRequestContext = AuthorizationContextUtil.getAuthorizationRequestContextFromScopes(session, scope);
-            validScopes = TokenManager.isValidScope(session, scope, authorizationRequestContext, client, null);
-        } else {
-            validScopes = TokenManager.isValidScope(session, scope, client, null);
-        }
-
-        if (!validScopes) {
+        if (!TokenManager.isValidScope(session, scope, client)) {
             String errorMessage = "Invalid scopes: " + scope;
             event.detail(Details.REASON, errorMessage);
             event.error(Errors.INVALID_REQUEST);
@@ -228,7 +305,7 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
 
         try {
             ClientSessionContext clientSessionCtx = TokenManager.attachAuthenticationSession(this.session, targetUserSession, authSession,
-                    !OAuth2Constants.REFRESH_TOKEN_TYPE.equals(requestedTokenType)); // create transient session if needed except for refresh
+                    context.getRestrictedScopes(), !OAuth2Constants.REFRESH_TOKEN_TYPE.equals(requestedTokenType)); // create transient session if needed except for refresh
 
             if (requestedTokenType.equals(OAuth2Constants.REFRESH_TOKEN_TYPE)
                     && clientSessionCtx.getClientScopesStream().filter(s -> OAuth2Constants.OFFLINE_ACCESS.equals(s.getName())).findAny().isPresent()) {
@@ -244,40 +321,54 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
                 clientSessionCtx.setAttribute(Constants.REQUESTED_AUDIENCE_CLIENTS, targetAudienceClients.toArray(ClientModel[]::new));
             }
 
-            validateConsents(targetUser, clientSessionCtx);
+            validateConsents(targetUser, scope);
             clientSessionCtx.setAttribute(Constants.GRANT_TYPE, OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE);
 
             TokenContextEncoderProvider encoder = session.getProvider(TokenContextEncoderProvider.class);
-            AccessTokenContext subjectTokenContext = encoder.getTokenContextFromTokenId(subjectToken.getId());
 
-            //copy subject client from the client session notes if the subject token used has already been exchanged
-            if (OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE.equals(subjectTokenContext.getGrantType())) {
-                ClientModel subjectClient = session.clients().getClientByClientId(realm, subjectToken.getIssuedFor());
-                if (subjectClient != null) {
-                    AuthenticatedClientSessionModel subjectClientSession = targetUserSession.getAuthenticatedClientSessionByClient(subjectClient.getId());
-                    if (subjectClientSession != null) {
-                        subjectClientSession.getNotes().entrySet().stream()
-                                .filter(note -> note.getKey().startsWith(Constants.TOKEN_EXCHANGE_SUBJECT_CLIENT))
-                                .forEach(note -> clientSessionCtx.getClientSession().setNote(note.getKey(), note.getValue()));
+            if (subjectToken != null) {
+                AccessTokenContext subjectTokenContext = encoder.getTokenContextFromTokenId(subjectToken.getId());
+
+                //copy subject client from the client session notes if the subject token used has already been exchanged
+                if (OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE.equals(subjectTokenContext.getGrantType())) {
+                    ClientModel subjectClient = session.clients().getClientByClientId(realm, subjectToken.getIssuedFor());
+                    if (subjectClient != null) {
+                        AuthenticatedClientSessionModel subjectClientSession = targetUserSession.getAuthenticatedClientSessionByClient(subjectClient.getId());
+                        if (subjectClientSession != null) {
+                            subjectClientSession.getNotes().entrySet().stream()
+                                    .filter(note -> note.getKey().startsWith(Constants.TOKEN_EXCHANGE_SUBJECT_CLIENT))
+                                    .forEach(note -> clientSessionCtx.getClientSession().setNote(note.getKey(), note.getValue()));
+                        }
                     }
                 }
-            }
 
-            //store client id of the subject token
-            clientSessionCtx.getClientSession().setNote(Constants.TOKEN_EXCHANGE_SUBJECT_CLIENT + subjectToken.getIssuedFor(), subjectToken.getId());
+                //store client id of the subject token
+                clientSessionCtx.getClientSession().setNote(Constants.TOKEN_EXCHANGE_SUBJECT_CLIENT + subjectToken.getIssuedFor(), subjectToken.getId());
+            }
 
             TokenManager.AccessTokenResponseBuilder responseBuilder = tokenManager.responseBuilder(realm, client, event, session,
                     clientSessionCtx.getClientSession().getUserSession(), clientSessionCtx).generateAccessToken();
 
             checkRequestedAudiences(responseBuilder);
 
-            if (targetUserSession.getPersistenceState() == UserSessionModel.SessionPersistenceState.TRANSIENT && !isOfflineSession) {
+            if (encoder.getTokenContextFromTokenId(responseBuilder.getAccessToken().getId()).getSessionType() == AccessTokenContext.SessionType.TRANSIENT) {
                 responseBuilder.getAccessToken().setSessionId(null);
                 event.session((String) null);
             }
 
             if (OAuth2Constants.REFRESH_TOKEN_TYPE.equals(requestedTokenType)) {
                 responseBuilder.generateRefreshToken();
+                bindRefreshTokenWithClientCertificate(responseBuilder);
+            }
+
+            try {
+                session.clientPolicy().triggerOnEvent(new TokenExchangeResponseContext(formParams, clientSessionCtx, responseBuilder));
+            } catch (ClientPolicyException cpe) {
+                event.detail(Details.REASON, Details.CLIENT_POLICY_ERROR);
+                event.detail(Details.CLIENT_POLICY_ERROR, cpe.getError());
+                event.detail(Details.CLIENT_POLICY_ERROR_DETAIL, cpe.getErrorDetail());
+                event.error(cpe.getError());
+                throw new CorsErrorResponseException(cors, cpe.getError(), cpe.getErrorDetail(), cpe.getErrorStatus());
             }
 
             AccessTokenResponse res;
@@ -300,6 +391,7 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
             if (responseBuilder.getAccessToken().getAudience() != null) {
                 event.detail(Details.AUDIENCE, CollectionUtil.join(List.of(responseBuilder.getAccessToken().getAudience()), " "));
             }
+
             event.success();
 
             return cors.add(Response.ok(res, MediaType.APPLICATION_JSON_TYPE));
@@ -358,5 +450,9 @@ public class StandardTokenExchangeProvider extends AbstractTokenExchangeProvider
         event.detail(Details.REASON, "requested_token_type unsupported");
         event.error(Errors.INVALID_REQUEST);
         throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST, "requested_token_type unsupported", Response.Status.BAD_REQUEST);
+    }
+
+    private static boolean isSenderConstrainedToken(AccessToken token) {
+        return token.getConfirmation() != null;
     }
 }

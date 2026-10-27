@@ -17,7 +17,14 @@
 
 package org.keycloak.protocol.saml.installation;
 
-import org.jboss.logging.Logger;
+import java.io.StringWriter;
+import java.net.URI;
+import java.util.Collections;
+import javax.xml.stream.XMLStreamWriter;
+
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.Config;
 import org.keycloak.dom.saml.v2.metadata.EntityDescriptorType;
 import org.keycloak.dom.saml.v2.metadata.KeyDescriptorType;
@@ -34,12 +41,7 @@ import org.keycloak.saml.common.constants.JBossSAMLURIConstants;
 import org.keycloak.saml.common.util.StaxUtil;
 import org.keycloak.saml.processing.core.saml.v2.writers.SAMLMetadataWriter;
 
-import java.io.StringWriter;
-import java.net.URI;
-import java.util.Collections;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import javax.xml.stream.XMLStreamWriter;
+import org.jboss.logging.Logger;
 
 
 /**
@@ -121,7 +123,7 @@ public class SamlSPDescriptorClientInstallation implements ClientInstallationPro
     }
 
     @Override
-    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI serverBaseUri) {
+    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI serverBaseUri, boolean includeSecrets) {
         String descriptor = getSPDescriptorForClient(client);
         return Response.ok(descriptor, MediaType.TEXT_PLAIN_TYPE).build();
     }

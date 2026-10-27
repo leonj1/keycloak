@@ -17,6 +17,14 @@
 
 package org.keycloak.models.cache.infinispan.entities;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
 import org.keycloak.common.util.MultivaluedHashMap;
 import org.keycloak.credential.CredentialModel;
 import org.keycloak.models.GroupModel;
@@ -26,14 +34,8 @@ import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.cache.infinispan.DefaultLazyLoader;
 import org.keycloak.models.cache.infinispan.LazyLoader;
-
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Set;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
+import org.keycloak.models.utils.StorageUnavailableUserModelDelegate;
+import org.keycloak.models.utils.UserModelDelegate;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -43,6 +45,7 @@ public class CachedUser extends AbstractExtendableRevisioned implements InRealm 
 
     private final String realm;
     private final Long createdTimestamp;
+    private final Long lastModifiedTimestamp;
     private final boolean emailVerified;
     private final boolean enabled;
     private final String federationLink;
@@ -55,10 +58,11 @@ public class CachedUser extends AbstractExtendableRevisioned implements InRealm 
     private final LazyLoader<UserModel, Set<String>> groups;
     private final LazyLoader<UserModel, List<CredentialModel>> storedCredentials;
 
-    public CachedUser(Long revision, RealmModel realm, UserModel user, int notBefore) {
+    public CachedUser(long revision, RealmModel realm, UserModel user, int notBefore) {
         super(revision, user.getId());
         this.realm = realm.getId();
         this.createdTimestamp = user.getCreatedTimestamp();
+        this.lastModifiedTimestamp = user.getLastModifiedTimestamp();
         this.emailVerified = user.isEmailVerified();
         this.enabled = user.isEnabled();
         this.federationLink = user.getFederationLink();
@@ -69,11 +73,21 @@ public class CachedUser extends AbstractExtendableRevisioned implements InRealm 
         this.eagerLoadedAttributes.putSingle(UserModel.FIRST_NAME,user.getFirstName());
         this.eagerLoadedAttributes.putSingle(UserModel.LAST_NAME,user.getLastName());
         this.eagerLoadedAttributes.putSingle(UserModel.EMAIL,user.getEmail());
-        this.lazyLoadedAttributes = new DefaultLazyLoader<>(userModel -> new MultivaluedHashMap<>(userModel.getAttributes()), MultivaluedHashMap::new);
-        this.requiredActions = new DefaultLazyLoader<>(userModel -> userModel.getRequiredActionsStream().collect(Collectors.toSet()), Collections::emptySet);
-        this.roleMappings = new DefaultLazyLoader<>(userModel -> userModel.getRoleMappingsStream().map(RoleModel::getId).collect(Collectors.toSet()), Collections::emptySet);
-        this.groups = new DefaultLazyLoader<>(userModel -> userModel.getGroupsStream().map(GroupModel::getId).collect(Collectors.toCollection(LinkedHashSet::new)), LinkedHashSet::new);
-        this.storedCredentials = new DefaultLazyLoader<>(userModel -> userModel.credentialManager().getStoredCredentialsStream().collect(Collectors.toCollection(LinkedList::new)), LinkedList::new);
+        this.lazyLoadedAttributes = new DefaultLazyLoader<>(userModel -> new MultivaluedHashMap<>(userModel.getAttributes()), MultivaluedHashMap::new, CachedUser::isStorageAvailable);
+        this.requiredActions = new DefaultLazyLoader<>(userModel -> userModel.getRequiredActionsStream().collect(Collectors.toSet()), Collections::emptySet, CachedUser::isStorageAvailable);
+        this.roleMappings = new DefaultLazyLoader<>(userModel -> userModel.getRoleMappingsStream().map(RoleModel::getId).collect(Collectors.toSet()), Collections::emptySet, CachedUser::isStorageAvailable);
+        this.groups = new DefaultLazyLoader<>(userModel -> userModel.getGroupsStream().map(GroupModel::getId).collect(Collectors.toCollection(LinkedHashSet::new)), LinkedHashSet::new, CachedUser::isStorageAvailable);
+        this.storedCredentials = new DefaultLazyLoader<>(userModel -> userModel.credentialManager().getStoredCredentialsStream().collect(Collectors.toCollection(LinkedList::new)), LinkedList::new, CachedUser::isStorageAvailable);
+    }
+
+    static boolean isStorageAvailable(UserModel userModel) {
+        while (userModel instanceof UserModelDelegate delegate) {
+            if (userModel instanceof StorageUnavailableUserModelDelegate) {
+                return false;
+            }
+            userModel = delegate.getDelegate();
+        }
+        return true;
     }
 
     public String getRealm() {
@@ -93,6 +107,10 @@ public class CachedUser extends AbstractExtendableRevisioned implements InRealm 
 
     public Long getCreatedTimestamp() {
         return createdTimestamp;
+    }
+
+    public Long getLastModifiedTimestamp() {
+        return lastModifiedTimestamp;
     }
 
     public String getEmail() {

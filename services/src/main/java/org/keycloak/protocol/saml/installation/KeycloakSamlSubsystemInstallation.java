@@ -17,6 +17,11 @@
 
 package org.keycloak.protocol.saml.installation;
 
+import java.net.URI;
+
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.Config;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
@@ -26,10 +31,6 @@ import org.keycloak.protocol.ClientInstallationProvider;
 import org.keycloak.protocol.saml.SamlClient;
 import org.keycloak.protocol.saml.SamlProtocol;
 
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import java.net.URI;
-
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
  * @version $Revision: 1 $
@@ -37,11 +38,11 @@ import java.net.URI;
 public class KeycloakSamlSubsystemInstallation implements ClientInstallationProvider {
 
     @Override
-    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI baseUri) {
+    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI baseUri, boolean includeSecrets) {
         SamlClient samlClient = new SamlClient(client);
         StringBuilder buffer = new StringBuilder();
         buffer.append("<secure-deployment name=\"YOUR-WAR.war\">\n");
-        KeycloakSamlClientInstallation.baseXml(session, realm, client, baseUri, samlClient, buffer);
+        KeycloakSamlClientInstallation.baseXml(session, realm, client, baseUri, samlClient, buffer, includeSecrets);
         buffer.append("</secure-deployment>\n");
         return Response.ok(buffer.toString(), MediaType.TEXT_PLAIN_TYPE).build();
     }

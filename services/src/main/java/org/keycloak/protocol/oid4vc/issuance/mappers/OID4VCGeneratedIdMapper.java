@@ -17,17 +17,21 @@
 
 package org.keycloak.protocol.oid4vc.issuance.mappers;
 
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.UserSessionModel;
-import org.keycloak.protocol.ProtocolMapper;
-import org.keycloak.protocol.oid4vc.model.VerifiableCredential;
-import org.keycloak.provider.ProviderConfigProperty;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.UserSessionModel;
+import org.keycloak.models.oid4vci.CredentialScopeModel;
+import org.keycloak.protocol.ProtocolMapper;
+import org.keycloak.protocol.oid4vc.model.VerifiableCredential;
+import org.keycloak.provider.ProviderConfigProperty;
+
+import static org.keycloak.OID4VCConstants.CLAIM_NAME_JTI;
 
 /**
  * Adds a generated ID to the credential (as a configurable property).
@@ -37,14 +41,13 @@ import java.util.UUID;
 public class OID4VCGeneratedIdMapper extends OID4VCMapper {
 
     public static final String MAPPER_ID = "oid4vc-generated-id-mapper";
-    public static final String SUBJECT_PROPERTY_CONFIG_KEY = "subjectProperty";
     private static final String SUBJECT_PROPERTY_CONFIG_KEY_DEFAULT = "id";
 
     private static final List<ProviderConfigProperty> CONFIG_PROPERTIES = new ArrayList<>();
 
     static {
         ProviderConfigProperty idPropertyNameConfig = new ProviderConfigProperty();
-        idPropertyNameConfig.setName(SUBJECT_PROPERTY_CONFIG_KEY);
+        idPropertyNameConfig.setName(CLAIM_NAME);
         idPropertyNameConfig.setLabel("ID Property Name");
         idPropertyNameConfig.setHelpText("Name of the property to contain the generated id.");
         idPropertyNameConfig.setDefaultValue(SUBJECT_PROPERTY_CONFIG_KEY_DEFAULT);
@@ -57,19 +60,48 @@ public class OID4VCGeneratedIdMapper extends OID4VCMapper {
         return CONFIG_PROPERTIES;
     }
 
-    public void setClaimsForCredential(VerifiableCredential verifiableCredential,
-                                       UserSessionModel userSessionModel) {
+    /**
+     * this claim is not added by default to the metadata
+     */
+    @Override
+    public boolean includeInMetadata() {
+        return Optional.ofNullable(mapperModel.getConfig().get(CredentialScopeModel.VC_INCLUDE_IN_METADATA))
+                       .map(Boolean::parseBoolean)
+                       .orElse(false);
+    }
+
+    @Override
+    protected Set<String> getAllowedReservedClaims() {
+        // The value is a generated id, not user-controlled; the claim name may legitimately target "jti".
+        return Set.of(CLAIM_NAME_JTI);
+    }
+
+    @Override
+    public List<String> getMetadataAttributePath() {
+        return getMetadataAttributePath(getGeneratedIdClaimName());
+    }
+
+    @Override
+    protected List<String> getClaimLookupPath() {
+        return getClaimLookupPath(getGeneratedIdClaimName());
+    }
+
+    public void setClaim(VerifiableCredential verifiableCredential,
+                         UserSessionModel userSessionModel) {
         // nothing to do for the mapper.
     }
 
     @Override
-    public void setClaimsForSubject(Map<String, Object> claims, UserSessionModel userSessionModel) {
-        String property = Optional.ofNullable(mapperModel.getConfig())
-                .map(config -> config.get(SUBJECT_PROPERTY_CONFIG_KEY))
-                .orElse(SUBJECT_PROPERTY_CONFIG_KEY_DEFAULT);
-
+    public void setClaim(Map<String, Object> claims, UserSessionModel userSessionModel) {
         // Assign a generated ID
-        claims.put(property, String.format("urn:uuid:%s", UUID.randomUUID()));
+        String propertyName = getGeneratedIdClaimName();
+        claims.put(propertyName, String.format("urn:uuid:%s", UUID.randomUUID()));
+    }
+
+    private String getGeneratedIdClaimName() {
+        return Optional.ofNullable(mapperModel.getConfig())
+                .map(config -> config.get(CLAIM_NAME))
+                .orElse(SUBJECT_PROPERTY_CONFIG_KEY_DEFAULT);
     }
 
     @Override

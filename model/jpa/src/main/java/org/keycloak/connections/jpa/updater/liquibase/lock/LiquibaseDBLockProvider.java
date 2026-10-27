@@ -17,10 +17,9 @@
 
 package org.keycloak.connections.jpa.updater.liquibase.lock;
 
-import liquibase.Liquibase;
-import liquibase.exception.DatabaseException;
-import liquibase.exception.LiquibaseException;
-import org.jboss.logging.Logger;
+import java.sql.Connection;
+import java.sql.SQLException;
+
 import org.keycloak.common.util.Retry;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.connections.jpa.JpaConnectionProviderFactory;
@@ -29,8 +28,10 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.dblock.DBLockProvider;
 import org.keycloak.models.utils.KeycloakModelUtils;
 
-import java.sql.Connection;
-import java.sql.SQLException;
+import liquibase.Liquibase;
+import liquibase.exception.DatabaseException;
+import liquibase.exception.LiquibaseException;
+import org.jboss.logging.Logger;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -97,7 +98,7 @@ public class LiquibaseDBLockProvider implements DBLockProvider {
                     logger.warnf("Locking namespace %s which was already locked in this provider", lock);
                     return;
                 } else {
-                    throw new RuntimeException(String.format("Trying to get a lock when one was already taken by the provider"));
+                    throw new RuntimeException("Trying to get a lock when one was already taken by the provider");
                 }
             }
 
@@ -109,13 +110,17 @@ public class LiquibaseDBLockProvider implements DBLockProvider {
 
             }, (int iteration, Throwable e) -> {
 
+                safeRollbackConnection();
                 if (e instanceof LockRetryException && iteration < (DEFAULT_MAX_ATTEMPTS - 1)) {
                     // Indicates we should try to acquire lock again in different transaction
-                    safeRollbackConnection();
                     restart();
                 } else {
-                    safeRollbackConnection();
                     safeCloseConnection();
+                    // Fail fast with the original exception, as retrying would only hit a null lockService
+                    if (e instanceof RuntimeException re) {
+                        throw re;
+                    }
+                    throw (Error) e;
                 }
 
             }, DEFAULT_MAX_ATTEMPTS, 10);
@@ -164,9 +169,7 @@ public class LiquibaseDBLockProvider implements DBLockProvider {
 
     @Override
     public void close() {
-        KeycloakModelUtils.suspendJtaTransaction(session.getKeycloakSessionFactory(), () -> {
-            safeCloseConnection();
-        });
+        KeycloakModelUtils.suspendJtaTransaction(session.getKeycloakSessionFactory(), this::safeCloseConnection);
     }
 
     private void safeRollbackConnection() {

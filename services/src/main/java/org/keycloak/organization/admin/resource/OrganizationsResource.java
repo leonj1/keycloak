@@ -23,6 +23,7 @@ import java.util.stream.Stream;
 
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
+import jakarta.ws.rs.ForbiddenException;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -32,19 +33,11 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.Status;
-import org.eclipse.microprofile.openapi.annotations.Operation;
-import org.eclipse.microprofile.openapi.annotations.enums.SchemaType;
-import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
-import org.eclipse.microprofile.openapi.annotations.media.Content;
-import org.eclipse.microprofile.openapi.annotations.media.Schema;
-import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
-import org.eclipse.microprofile.openapi.annotations.tags.Tag;
-import org.jboss.logging.Logger;
-import org.jboss.resteasy.reactive.NoCache;
+
+import org.keycloak.authorization.fgap.AdminPermissionsSchema;
 import org.keycloak.events.admin.OperationType;
 import org.keycloak.events.admin.ResourceType;
+import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.ModelValidationException;
@@ -60,9 +53,20 @@ import org.keycloak.services.ErrorResponse;
 import org.keycloak.services.resources.KeycloakOpenAPI;
 import org.keycloak.services.resources.admin.AdminEventBuilder;
 import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
-import org.keycloak.utils.ReservedCharValidator;
 import org.keycloak.utils.SearchQueryUtils;
 import org.keycloak.utils.StringUtil;
+
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.enums.SchemaType;
+import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.NoCache;
 
 @Extension(name = KeycloakOpenAPI.Profiles.ADMIN, value = "")
 public class OrganizationsResource {
@@ -97,14 +101,12 @@ public class OrganizationsResource {
         @APIResponse(responseCode = "403", description = "Forbidden")
     })
     public Response create(OrganizationRepresentation organization) {
-        auth.realm().requireManageRealm();
-        Organizations.checkEnabled(provider);
+        auth.orgs().requireManage();
+        Organizations.checkEnabled(provider, auth);
 
         if (organization == null) {
             throw ErrorResponse.error("Organization cannot be null.", Response.Status.BAD_REQUEST);
         }
-
-        ReservedCharValidator.validateNoSpace(organization.getAlias());
 
         try {
             OrganizationsValidation.validateUrl(organization.getRedirectUrl());
@@ -129,6 +131,7 @@ public class OrganizationsResource {
      * @param exact if {@code true}, the organizations will be searched using exact match for the {@code search} param - i.e.
      *              either the organization name or one of its domains must match exactly the {@code search} param. If false,
      *              the method returns all organizations whose name or (domains) partially match the {@code search} param.
+     * @param identityProviderAlias the alias of an identity provider, to only return the organizations linked to it.
      * @param first the position of the first result to be processed (pagination offset). Ignored if negative or {@code null}.
      * @param max the maximum number of results to be returned. Ignored if negative or {@code null}.
      * @return a non-null {@code Stream} of matched organizations.
@@ -139,7 +142,7 @@ public class OrganizationsResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.ORGANIZATIONS)
     @Operation(summary = "Returns a paginated list of organizations filtered according to the specified parameters")
     @APIResponses(value = {
-        @APIResponse(responseCode = "200", description = "", content = @Content(schema = @Schema(implementation = OrganizationRepresentation.class, type = SchemaType.ARRAY))),
+        @APIResponse(responseCode = "200", description = "OK", content = @Content(schema = @Schema(implementation = OrganizationRepresentation.class, type = SchemaType.ARRAY))),
         @APIResponse(responseCode = "403", description = "Forbidden"),
         @APIResponse(responseCode = "404", description = "Not Found")
     })
@@ -147,12 +150,23 @@ public class OrganizationsResource {
             @Parameter(description = "A String representing either an organization name or domain") @QueryParam("search") String search,
             @Parameter(description = "A query to search for custom attributes, in the format 'key1:value2 key2:value2'") @QueryParam("q") String searchQuery,
             @Parameter(description = "Boolean which defines whether the param 'search' must match exactly or not") @QueryParam("exact") Boolean exact,
+            @Parameter(description = "The alias of an identity provider, to only return the organizations linked to it. Cannot be combined with 'q'") @QueryParam("identityProvider") String identityProviderAlias,
             @Parameter(description = "The position of the first result to be processed (pagination offset)") @QueryParam("first") @DefaultValue("0") Integer first,
             @Parameter(description = "The maximum number of results to be returned - defaults to 10") @QueryParam("max") @DefaultValue("10") Integer max,
             @Parameter(description = "if false, return the full representation. Otherwise, only the basic fields are returned.") @QueryParam("briefRepresentation") @DefaultValue("true") boolean briefRepresentation
     ) {
-        auth.realm().requireManageRealm();
-        Organizations.checkEnabled(provider);
+        auth.orgs().requireQuery();
+        Organizations.checkEnabled(provider, auth);
+
+        // if a dedicated admin can query, but cannot view (and FGAP is not enabled) - we can return empty list right away to save a roundtrip to the DB
+        if (!AdminPermissionsSchema.SCHEMA.isAdminPermissionsEnabled(session.getContext().getRealm()) && !auth.orgs().canView()) {
+            return Stream.empty();
+        }
+
+        if (StringUtil.isNotBlank(identityProviderAlias)) {
+            return provider.getByIdentityProvider(resolveIdentityProvider(identityProviderAlias, searchQuery), search, exact, first, max)
+                    .map(model -> ModelToRepresentation.toRepresentation(model, briefRepresentation));
+        }
 
         // check if are searching orgs by attribute.
         if (StringUtil.isNotBlank(searchQuery)) {
@@ -163,13 +177,28 @@ public class OrganizationsResource {
         }
     }
 
+    private IdentityProviderModel resolveIdentityProvider(String alias, String searchQuery) {
+        auth.realm().requireViewIdentityProviders();
+
+        if (StringUtil.isNotBlank(searchQuery)) {
+            throw ErrorResponse.error("The 'identityProvider' and 'q' parameters cannot be combined.", Response.Status.BAD_REQUEST);
+        }
+
+        IdentityProviderModel identityProvider = session.identityProviders().getByAlias(alias);
+
+        if (identityProvider == null) {
+            throw ErrorResponse.error("Identity provider '" + alias + "' not found.", Response.Status.BAD_REQUEST);
+        }
+
+        return identityProvider;
+    }
+
     /**
      * Base path for the admin REST API for one particular organization.
      */
     @Path("{org-id}")
     public OrganizationResource get(@PathParam("org-id") String orgId) {
-        auth.realm().requireManageRealm();
-        Organizations.checkEnabled(provider);
+        Organizations.checkEnabled(provider, auth);
 
         if (StringUtil.isBlank(orgId)) {
             throw ErrorResponse.error("Id cannot be null.", Response.Status.BAD_REQUEST);
@@ -178,12 +207,15 @@ public class OrganizationsResource {
         OrganizationModel organizationModel = provider.getById(orgId);
 
         if (organizationModel == null) {
-            throw ErrorResponse.error("Organization not found.", Response.Status.NOT_FOUND);
+            throw (auth.orgs().canQuery()) ?
+                    ErrorResponse.error("Organization not found.", Response.Status.NOT_FOUND) :
+                    new ForbiddenException();
         }
 
+        auth.orgs().requireView(organizationModel);
         session.getContext().setOrganization(organizationModel);
 
-        return new OrganizationResource(session, organizationModel, adminEvent);
+        return new OrganizationResource(session, organizationModel, adminEvent, auth);
     }
 
     /**
@@ -197,13 +229,27 @@ public class OrganizationsResource {
     @Produces(MediaType.APPLICATION_JSON)
     @Tag(name = KeycloakOpenAPI.Admin.Tags.ORGANIZATIONS)
     @Operation(summary = "Returns the organizations counts.")
+    @APIResponses(value = {
+        @APIResponse(responseCode = "200", description = "OK"),
+        @APIResponse(responseCode = "403", description = "Forbidden")
+    })
     public long getOrganizationCount(
             @Parameter(description = "A String representing either an organization name or domain") @QueryParam("search") String search,
             @Parameter(description = "A query to search for custom attributes, in the format 'key1:value2 key2:value2'") @QueryParam("q") String searchQuery,
-            @Parameter(description = "Boolean which defines whether the param 'search' must match exactly or not") @QueryParam("exact") Boolean exact
+            @Parameter(description = "Boolean which defines whether the param 'search' must match exactly or not") @QueryParam("exact") Boolean exact,
+            @Parameter(description = "The alias of an identity provider, to only count the organizations linked to it. Cannot be combined with 'q'") @QueryParam("identityProvider") String identityProviderAlias
     ) {
-        auth.realm().requireManageRealm();
-        Organizations.checkEnabled(provider);
+        auth.orgs().requireQuery();
+        Organizations.checkEnabled(provider, auth);
+
+        // if a dedicated admin can query, but cannot view (and FGAP is not enabled) - we can return 0L right away to save a roundtrip to the DB
+        if (!AdminPermissionsSchema.SCHEMA.isAdminPermissionsEnabled(session.getContext().getRealm()) && !auth.orgs().canView()) {
+            return 0L;
+        }
+
+        if (StringUtil.isNotBlank(identityProviderAlias)) {
+            return provider.countByIdentityProvider(resolveIdentityProvider(identityProviderAlias, searchQuery), search, exact);
+        }
 
         if (StringUtil.isNotBlank(searchQuery)) {
             Map<String, String> attributes = SearchQueryUtils.getFields(searchQuery);
@@ -219,13 +265,18 @@ public class OrganizationsResource {
     @Tag(name = KeycloakOpenAPI.Admin.Tags.ORGANIZATIONS)
     @Operation(summary = "Returns the organizations associated with the user that has the specified id")
     @APIResponses(value = {
-        @APIResponse(responseCode = "200", description = "", content = @Content(schema = @Schema(implementation = OrganizationRepresentation.class, type = SchemaType.ARRAY))),
-        @APIResponse(responseCode = "400", description = "Bad Request")
+        @APIResponse(responseCode = "200", description = "OK", content = @Content(schema = @Schema(implementation = OrganizationRepresentation.class, type = SchemaType.ARRAY))),
+        @APIResponse(responseCode = "400", description = "Bad Request"),
+        @APIResponse(responseCode = "403", description = "Forbidden")
     })
     public Stream<OrganizationRepresentation> getOrganizations(
             @PathParam("member-id") String memberId,
             @Parameter(description = "if false, return the full representation. Otherwise, only the basic fields are returned.")
-            @QueryParam("briefRepresentation") @DefaultValue("true") boolean briefRepresentation) {
-        return new OrganizationMemberResource(session, null, adminEvent).getOrganizations(memberId, briefRepresentation);
+            @QueryParam("briefRepresentation") @DefaultValue("true") boolean briefRepresentation
+    ) {
+        auth.orgs().requireQuery();
+        Organizations.checkEnabled(provider, auth);
+
+        return new OrganizationMemberResource(session, null, adminEvent, auth).getOrganizations(memberId, briefRepresentation);
     }
 }

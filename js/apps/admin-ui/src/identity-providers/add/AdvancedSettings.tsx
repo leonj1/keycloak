@@ -19,11 +19,13 @@ import { useState } from "react";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { useAdminClient } from "../../admin-client";
+import { useAccess } from "../../context/access/Access";
 import useIsFeatureEnabled, { Feature } from "../../utils/useIsFeatureEnabled";
 import type { FieldProps } from "../component/FormGroupField";
 import { FormGroupField } from "../component/FormGroupField";
 import { SwitchField } from "../component/SwitchField";
 import { TextField } from "../component/TextField";
+import { TimeSelector } from "../../components/time-selector/TimeSelector";
 
 const LoginFlow = ({
   field,
@@ -95,6 +97,7 @@ const LoginFlow = ({
 };
 
 const SYNC_MODES = ["IMPORT", "LEGACY", "FORCE"];
+const SHOW_IN_ACCOUNT_CONSOLE_VALUES = ["ALWAYS", "WHEN_LINKED", "NEVER"];
 type AdvancedSettingsProps = {
   isOIDC: boolean;
   isSAML: boolean;
@@ -106,7 +109,9 @@ export const AdvancedSettings = ({
   isSAML,
   isOAuth2,
 }: AdvancedSettingsProps) => {
+  const { adminClient } = useAdminClient();
   const { t } = useTranslation();
+  const { hasAccess } = useAccess();
   const {
     control,
     register,
@@ -121,19 +126,73 @@ export const AdvancedSettings = ({
   const claimFilterRequired = filteredByClaim === "true";
   const isFeatureEnabled = useIsFeatureEnabled();
   const isTransientUsersEnabled = isFeatureEnabled(Feature.TransientUsers);
+  const isClientAuthFederatedEnabled = isFeatureEnabled(
+    Feature.ClientAuthFederated,
+  );
+  const jwtAuthorizationGrant = isFeatureEnabled(Feature.JWTAuthorizationGrant);
+  const isIdentityBrokeringAPIV1Enabled = isFeatureEnabled(
+    Feature.IdentityBrokeringAPIV1,
+  );
   const transientUsers = useWatch({
     control,
     name: "config.doNotStoreUsers",
     defaultValue: "false",
   });
   const syncModeAvailable = transientUsers === "false";
+  const jwtAuthorizationGrantEnabled = useWatch({
+    control,
+    name: "config.jwtAuthorizationGrantEnabled",
+  });
+  const supportsClientAssertions = useWatch({
+    control,
+    name: "config.supportsClientAssertions",
+  });
+
+  const [hasBrokerReadTokenRole, setHasBrokerReadTokenRole] = useState(false);
+  const storedTokensReadableSupported =
+    (isOIDC || isSAML || isOAuth2) && isIdentityBrokeringAPIV1Enabled;
+
+  useFetch(
+    async () => {
+      if (!storedTokensReadableSupported) {
+        return false;
+      }
+      if (!hasAccess("view-clients")) {
+        return true;
+      }
+      const brokerClient = (
+        await adminClient.clients.find({ clientId: "broker" })
+      ).find((client) => client.clientId === "broker");
+      if (!brokerClient?.id) {
+        return false;
+      }
+      const role = await adminClient.clients.findRole({
+        id: brokerClient.id,
+        roleName: "read-token",
+      });
+      return !!role;
+    },
+    (hasRole) => {
+      setHasBrokerReadTokenRole(hasRole);
+    },
+    [storedTokensReadableSupported],
+  );
+
   return (
     <>
       {!isOIDC && !isSAML && !isOAuth2 && (
         <TextField field="config.defaultScope" label="scopes" />
       )}
+      {isFeatureEnabled(Feature.IdentityBrokeringAPIV2) && (
+        <SwitchField
+          field="config.storeTokenInSession"
+          label="storeTokenInSession"
+          fieldType="boolean"
+          defaultValue={!isSAML}
+        />
+      )}
       <SwitchField field="storeToken" label="storeTokens" fieldType="boolean" />
-      {(isSAML || isOIDC || isOAuth2) && (
+      {storedTokensReadableSupported && hasBrokerReadTokenRole && (
         <SwitchField
           field="addReadTokenRoleOnCreate"
           label="storedTokensReadable"
@@ -162,6 +221,21 @@ export const AdvancedSettings = ({
         field="hideOnLogin"
         label="hideOnLoginPage"
         fieldType="boolean"
+      />
+      <SelectControl
+        name="config.showInAccountConsole"
+        label={t("showInAccountConsole")}
+        labelIcon={t("showInAccountConsoleHelp")}
+        options={SHOW_IN_ACCOUNT_CONSOLE_VALUES.map((showInAccountConsole) => ({
+          key: showInAccountConsole,
+          value: t(
+            `showInAccountConsole.${showInAccountConsole.toLocaleLowerCase()}`,
+          ),
+        }))}
+        controller={{
+          defaultValue: SHOW_IN_ACCOUNT_CONSOLE_VALUES[0],
+          rules: { required: t("required") },
+        }}
       />
 
       {((!isSAML && !isOAuth2) || isOIDC) && (
@@ -268,7 +342,9 @@ export const AdvancedSettings = ({
                   field.onChange(value.toString());
                   // if field is checked, set sync mode to import
                   if (value) {
-                    setValue("config.syncMode", "IMPORT");
+                    setValue("config.syncMode", "IMPORT", {
+                      shouldDirty: true,
+                    });
                   }
                 }}
               />
@@ -295,6 +371,76 @@ export const AdvancedSettings = ({
         field="config.caseSensitiveOriginalUsername"
         label="caseSensitiveOriginalUsername"
       />
+      {hasAccess("manage-realm") && (
+        <SwitchField
+          field="config.allowAdminRoleMapping"
+          label="allowAdminRoleMapping"
+        />
+      )}
+      {isClientAuthFederatedEnabled && isOIDC && (
+        <SwitchField
+          field="config.supportsClientAssertions"
+          label="supportsClientAssertions"
+        />
+      )}
+      {isClientAuthFederatedEnabled &&
+        isOIDC &&
+        supportsClientAssertions === "true" && (
+          <SwitchField
+            field="config.supportsClientAssertionReuse"
+            label="supportsClientAssertionReuse"
+          />
+        )}
+      {isOIDC &&
+        ((isClientAuthFederatedEnabled &&
+          supportsClientAssertions === "true") ||
+          (jwtAuthorizationGrant &&
+            jwtAuthorizationGrantEnabled === "true")) && (
+          <SwitchField
+            field="config.allowClientIdAsAudience"
+            label="allowClientIdAsAudience"
+          />
+        )}
+      {isOIDC &&
+        ((isClientAuthFederatedEnabled &&
+          supportsClientAssertions === "true") ||
+          (jwtAuthorizationGrant &&
+            jwtAuthorizationGrantEnabled === "true")) && (
+          <FormGroupField label="fedClientAssertionMaxExp">
+            <Controller
+              name="config.fedClientAssertionMaxExp"
+              defaultValue={""}
+              control={control}
+              render={({ field }) => (
+                <TimeSelector
+                  className="kc-fed-client-assertion-max-expiration-time"
+                  data-testid="fed-client-assertion-max-expiration-time-input"
+                  value={field.value!}
+                  onChange={field.onChange}
+                  units={["minute", "hour", "day"]}
+                />
+              )}
+            />
+          </FormGroupField>
+        )}
+      {isSAML && (
+        <FormGroupField label="oneTimeUseMaxAgeSeconds">
+          <Controller
+            name="config.oneTimeUseMaxAgeSeconds"
+            defaultValue=""
+            control={control}
+            render={({ field }) => (
+              <TimeSelector
+                className="kc-one-time-use-max-age-seconds"
+                data-testid="one-time-use-max-age-seconds-input"
+                value={field.value!}
+                onChange={field.onChange}
+                units={["second", "minute", "hour"]}
+              />
+            )}
+          />
+        </FormGroupField>
+      )}
     </>
   );
 };

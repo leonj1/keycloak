@@ -1,12 +1,12 @@
-import { Page, expect } from "@playwright/test";
+import { type Page, expect } from "@playwright/test";
 import {
   assertSelectValue,
   selectItem,
   switchOff,
   switchOn,
-} from "../utils/form";
-import { confirmModal } from "../utils/modal";
-import { clickRowKebabItem } from "../utils/table";
+} from "../utils/form.ts";
+import { confirmModal } from "../utils/modal.ts";
+import { clickRowKebabItem } from "../utils/table.ts";
 
 export async function goToAdvancedTab(page: Page) {
   await page.getByTestId("advancedTab").click();
@@ -163,4 +163,85 @@ export async function saveAuthFlowOverride(page: Page) {
 
 export async function revertAuthFlowOverride(page: Page) {
   await page.getByTestId("OIDCAuthFlowOverrideRevert").click();
+}
+
+const oid4vciEnabledSwitch = "#attributes\\.oid4vci🍺enabled";
+const oid4vciAttesterTrustIdpsSelect =
+  "#attributes\\.oid4vci🍺attester_trust_idps";
+
+export async function switchOid4vciEnabled(page: Page, enable: boolean) {
+  if (enable) {
+    await switchOn(page, oid4vciEnabledSwitch);
+  } else {
+    await switchOff(page, oid4vciEnabledSwitch);
+  }
+}
+
+export async function assertOid4vciEnabled(page: Page, enabled: boolean) {
+  if (enabled) {
+    await expect(page.locator(oid4vciEnabledSwitch)).toBeChecked();
+  } else {
+    await expect(page.locator(oid4vciEnabledSwitch)).not.toBeChecked();
+  }
+}
+
+export function getOid4vciAttesterTrustIdpsSelect(page: Page) {
+  return page.locator(oid4vciAttesterTrustIdpsSelect);
+}
+
+export async function focusOid4vciAttesterTrustIdpsSelect(page: Page) {
+  await page.keyboard.press("Escape");
+  await getOid4vciAttesterTrustIdpsSelect(page).click();
+}
+
+export async function getOid4vciAttesterTrustIdpsValues(
+  page: Page,
+): Promise<string[]> {
+  await focusOid4vciAttesterTrustIdpsSelect(page);
+  const options = page.getByRole("option");
+  await options.first().waitFor({ state: "visible" });
+  return await options.allTextContents();
+}
+
+export async function selectOid4vciAttesterTrustIdps(
+  page: Page,
+  aliases: string[],
+) {
+  for (const alias of aliases) {
+    await focusOid4vciAttesterTrustIdpsSelect(page);
+    await page.getByRole("option", { name: alias, exact: true }).click();
+  }
+}
+
+export async function saveOid4vci(page: Page) {
+  await page.getByTestId("oid4vciSave").click();
+}
+
+export async function revertOid4vci(page: Page) {
+  await page.getByTestId("oid4vciRevert").click();
+}
+
+export async function assertOid4vciSection(
+  page: Page,
+  featureEnabled: boolean,
+) {
+  // Sections render together; wait for one that is always present so a hidden OID4VC section is not a false positive from a page that is still loading.
+  await expect(page.getByTestId("OIDCAuthFlowOverrideSave")).toBeVisible();
+
+  const toggleSwitch = page.locator(oid4vciEnabledSwitch);
+  await expect(toggleSwitch).toBeVisible({ visible: featureEnabled });
+
+  if (!featureEnabled) {
+    return;
+  }
+
+  await toggleSwitch.scrollIntoViewIfNeeded();
+  await assertOid4vciEnabled(page, false);
+  await switchOid4vciEnabled(page, true);
+  await saveOid4vci(page);
+  await assertOid4vciEnabled(page, true);
+  await switchOid4vciEnabled(page, false);
+  await assertOid4vciEnabled(page, false);
+  await revertOid4vci(page);
+  await assertOid4vciEnabled(page, true);
 }

@@ -17,22 +17,23 @@
 
 package org.keycloak.jose.jws;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import org.keycloak.common.util.Base64;
-import org.keycloak.common.util.Base64Url;
-import org.keycloak.crypto.SignatureSignerContext;
-import org.keycloak.jose.jwk.JWK;
-import org.keycloak.jose.jws.crypto.HMACProvider;
-import org.keycloak.jose.jws.crypto.RSAProvider;
-import org.keycloak.util.JsonSerialization;
-
-import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivateKey;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
+import java.util.Base64;
 import java.util.List;
+import java.util.stream.Collectors;
+import javax.crypto.SecretKey;
+
+import org.keycloak.common.util.Base64Url;
+import org.keycloak.crypto.SignatureSignerContext;
+import org.keycloak.jose.jwk.JWK;
+import org.keycloak.jose.jws.crypto.HMACProvider;
+import org.keycloak.jose.jws.crypto.RSAProvider;
+import org.keycloak.json.KeycloakJsonMapperFactory;
+
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -43,7 +44,7 @@ public class JWSBuilder {
     protected String kid;
     protected String x5t;
     protected JWK jwk;
-    protected List<X509Certificate> x5c;
+    protected List<String> x5c;
     protected String contentType;
     protected byte[] contentBytes;
 
@@ -68,12 +69,29 @@ public class JWSBuilder {
     }
 
     public JWSBuilder x5c(List<X509Certificate> x5c) {
-        this.x5c = x5c;
+        this.x5c = x5c.stream()
+                .map(x509Certificate -> {
+                    try {
+                        return Base64.getEncoder().encodeToString(x509Certificate.getEncoded());
+                    } catch (CertificateEncodingException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .collect(Collectors.toList());
         return this;
     }
 
     public JWSBuilder contentType(String type) {
         this.contentType = type;
+        return this;
+    }
+
+    public JWSBuilder header(JWSHeader header) {
+        this.type = header.getType();
+        this.kid = header.getKeyId();
+        this.jwk = header.getKey();
+        this.x5c = header.getX5c();
+        this.contentType = header.getContentType();
         return this;
     }
 
@@ -84,7 +102,7 @@ public class JWSBuilder {
 
     public EncodingBuilder jsonContent(Object object) {
         try {
-            this.contentBytes = JsonSerialization.writeValueAsBytes(object);
+            this.contentBytes = KeycloakJsonMapperFactory.mapper().writeValueAsBytes(object);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -108,22 +126,18 @@ public class JWSBuilder {
         if (x5c != null && !x5c.isEmpty()) {
             builder.append(",\"x5c\" : [");
             for (int i = 0; i < x5c.size(); i++) {
-                X509Certificate certificate = x5c.get(i);
+                String certificate = x5c.get(i);
                 if (i > 0) {
                     builder.append(",");
                 }
-                try {
-                    builder.append("\"").append(Base64.encodeBytes(certificate.getEncoded())).append("\"");
-                } catch (CertificateEncodingException e) {
-                    throw new RuntimeException(e);
-                }
+                builder.append("\"").append(certificate).append("\"");
             }
             builder.append("]");
         }
         if (jwk != null) {
             try {
-                builder.append(",\"jwk\" : ").append(JsonSerialization.mapper.writeValueAsString(jwk));
-            } catch (JsonProcessingException e) {
+                builder.append(",\"jwk\" : ").append(KeycloakJsonMapperFactory.mapper().writeValueAsString(jwk));
+            } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         }

@@ -17,12 +17,22 @@
 
 package org.keycloak.authentication.authenticators.broker;
 
-import org.jboss.logging.Logger;
+import java.net.URI;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.core.UriBuilderException;
+import jakarta.ws.rs.core.UriInfo;
+
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
 import org.keycloak.authentication.AuthenticationProcessor;
 import org.keycloak.authentication.actiontoken.idpverifyemail.IdpVerifyAccountLinkActionToken;
+import org.keycloak.authentication.actiontoken.idpverifyemail.IdpVerifyAccountLinkActionTokenHandler;
 import org.keycloak.authentication.authenticators.broker.util.SerializedBrokeredIdentityContext;
+import org.keycloak.broker.provider.AbstractIdentityProvider;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.common.util.Time;
 import org.keycloak.email.EmailException;
@@ -42,12 +52,7 @@ import org.keycloak.services.messages.Messages;
 import org.keycloak.sessions.AuthenticationSessionCompoundId;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
-import java.net.URI;
-import java.util.Objects;
-import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.UriBuilder;
-import java.util.concurrent.TimeUnit;
-import jakarta.ws.rs.core.*;
+import org.jboss.logging.Logger;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -57,6 +62,15 @@ public class IdpEmailVerificationAuthenticator extends AbstractIdpAuthenticator 
     private static Logger logger = Logger.getLogger(IdpEmailVerificationAuthenticator.class);
 
     public static final String VERIFY_ACCOUNT_IDP_USERNAME = "VERIFY_ACCOUNT_IDP_USERNAME";
+
+    /**
+     * Set on the original authentication session when a cross-browser confirmation created a SUO proof.
+     * Same-browser confirmation never sets this note (no SUO); cross-browser continuation must win the
+     * atomic SUO consume before proceeding.
+     */
+    public static final String VERIFY_ACCOUNT_IDP_CROSS_BROWSER = "VERIFY_ACCOUNT_IDP_CROSS_BROWSER";
+
+    public static final String IDP_LINK_CONFIRMATION_EMAIL_KEY = "IDP_LINK_CONFIRMATION_EMAIL_KEY";
 
     @Override
     protected void authenticateImpl(AuthenticationFlowContext context, SerializedBrokeredIdentityContext serializedCtx, BrokeredIdentityContext brokerContext) {
@@ -70,11 +84,31 @@ public class IdpEmailVerificationAuthenticator extends AbstractIdpAuthenticator 
             return;
         }
 
+        if (Boolean.parseBoolean(context.getAuthenticationSession().getAuthNote(AbstractIdentityProvider.UPDATE_PROFILE_USERNAME_CHANGED))
+                || Boolean.parseBoolean(context.getAuthenticationSession().getAuthNote(AbstractIdentityProvider.UPDATE_PROFILE_EMAIL_CHANGED))) {
+            logger.debug("Email or username changed on review. Ignoring email verification authenticator.");
+            context.attempted();
+            return;
+        }
+
         if (Objects.equals(authSession.getAuthNote(VERIFY_ACCOUNT_IDP_USERNAME), brokerContext.getUsername())) {
             UserModel existingUser = getExistingUser(session, realm, authSession);
 
             logger.debugf("User '%s' confirmed that wants to link with identity provider '%s' . Identity provider username is '%s' ", existingUser.getUsername(),
                     brokerContext.getIdpConfig().getAlias(), brokerContext.getUsername());
+
+            boolean crossBrowser = Boolean.parseBoolean(authSession.getAuthNote(VERIFY_ACCOUNT_IDP_CROSS_BROWSER));
+            if (crossBrowser) {
+                boolean consumed = IdpVerifyAccountLinkActionTokenHandler.runIfUserVerified(session, existingUser,
+                        brokerContext.getIdpConfig(), brokerContext.getId(), () -> { });
+                if (!consumed) {
+                    Response challenge = context.form()
+                            .setError(Messages.STALE_CODE)
+                            .createErrorPage(Response.Status.BAD_REQUEST);
+                    context.failure(AuthenticationFlowError.EXPIRED_CODE, challenge);
+                    return;
+                }
+            }
 
             context.setUser(existingUser);
             context.success();
@@ -84,8 +118,8 @@ public class IdpEmailVerificationAuthenticator extends AbstractIdpAuthenticator 
         UserModel existingUser = getExistingUser(session, realm, authSession);
 
         // Do not allow resending e-mail by simple page refresh
-        if (! Objects.equals(authSession.getAuthNote(Constants.VERIFY_EMAIL_KEY), existingUser.getEmail())) {
-            authSession.setAuthNote(Constants.VERIFY_EMAIL_KEY, existingUser.getEmail());
+        if (! Objects.equals(authSession.getAuthNote(IDP_LINK_CONFIRMATION_EMAIL_KEY), existingUser.getEmail())) {
+            authSession.setAuthNote(IDP_LINK_CONFIRMATION_EMAIL_KEY, existingUser.getEmail());
             sendVerifyEmail(session, context, existingUser, brokerContext);
         } else {
             showEmailSentPage(context, brokerContext);
@@ -97,7 +131,7 @@ public class IdpEmailVerificationAuthenticator extends AbstractIdpAuthenticator 
         logger.debugf("Re-sending email requested for user, details follow");
 
         // This will allow user to re-send email again
-        context.getAuthenticationSession().removeAuthNote(Constants.VERIFY_EMAIL_KEY);
+        context.getAuthenticationSession().removeAuthNote(IDP_LINK_CONFIRMATION_EMAIL_KEY);
 
         authenticateImpl(context, serializedCtx, brokerContext);
     }
@@ -131,7 +165,7 @@ public class IdpEmailVerificationAuthenticator extends AbstractIdpAuthenticator 
         String authSessionEncodedId = AuthenticationSessionCompoundId.fromAuthSession(authSession).getEncodedId();
         IdpVerifyAccountLinkActionToken token = new IdpVerifyAccountLinkActionToken(
           existingUser.getId(), existingUser.getEmail(), absoluteExpirationInSecs, authSessionEncodedId,
-          brokerContext.getUsername(), brokerContext.getIdpConfig().getAlias(), authSession.getClient().getClientId()
+          brokerContext.getUsername(), brokerContext.getId(), brokerContext.getIdpConfig().getAlias(), authSession.getClient().getClientId()
         );
         UriBuilder builder = Urls.actionTokenBuilder(uriInfo.getBaseUri(), token.serialize(session, realm, uriInfo),
                 authSession.getClient().getClientId(), authSession.getTabId(), AuthenticationProcessor.getClientData(session, authSession));

@@ -1,8 +1,11 @@
 import type { KeycloakAdminClient } from "../client.js";
 import IdentityProviderRepresentation from "../defs/identityProviderRepresentation.js";
+import type OrganizationIdentityProviderLinkRepresentation from "../defs/organizationIdentityProviderLinkRepresentation.js";
 import type OrganizationRepresentation from "../defs/organizationRepresentation.js";
-import UserRepresentation from "../defs/userRepresentation.js";
+import type OrganizationInvitationRepresentation from "../defs/organizationInvitationRepresentation.js";
 import Resource from "./resource.js";
+import { Groups } from "./groups.js";
+import OrganizationMemberRepresentation from "../defs/organizationMemberRepresentation.js";
 
 interface PaginatedQuery {
   first?: number; // The position of the first result to be processed (pagination offset)
@@ -12,6 +15,7 @@ interface PaginatedQuery {
 export interface OrganizationQuery extends PaginatedQuery {
   q?: string; // A query to search for custom attributes, in the format 'key1:value2 key2:value2'
   exact?: boolean; // Boolean which defines whether the param 'search' must match exactly or not
+  identityProvider?: string; // Alias of an identity provider, to only return the organizations linked to it. Cannot be combined with 'q'
 }
 
 interface MemberQuery extends PaginatedQuery {
@@ -19,10 +23,22 @@ interface MemberQuery extends PaginatedQuery {
   membershipType?: string;
 }
 
+export type MembershipType = "MANAGED" | "UNMANAGED";
+
+interface InvitationQuery extends PaginatedQuery {
+  orgId: string; //Id of the organization to get the invitations of
+  status?: string; //Filter by invitation status
+  email?: string; //Filter by email
+  search?: string; //Search across email, firstName, and lastName
+  firstName?: string; //Filter by first name
+  lastName?: string; //Filter by last name
+}
+
 export class Organizations extends Resource<{ realm?: string }> {
   /**
    * Organizations
    */
+  #client: KeycloakAdminClient;
 
   constructor(client: KeycloakAdminClient) {
     super(client, {
@@ -32,6 +48,7 @@ export class Organizations extends Resource<{ realm?: string }> {
       }),
       getBaseUrl: () => client.baseUrl,
     });
+    this.#client = client;
   }
 
   public find = this.makeRequest<
@@ -42,13 +59,23 @@ export class Organizations extends Resource<{ realm?: string }> {
     path: "/",
   });
 
-  public findOne = this.makeRequest<{ id: string }, OrganizationRepresentation>(
-    {
-      method: "GET",
-      path: "/{id}",
-      urlParamKeys: ["id"],
-    },
-  );
+  public count = this.makeRequest<
+    Pick<OrganizationQuery, "search" | "q" | "exact" | "identityProvider">,
+    number
+  >({
+    method: "GET",
+    path: "/count",
+  });
+
+  public findOne = this.makeRequest<
+    { id: string },
+    OrganizationRepresentation | null
+  >({
+    method: "GET",
+    path: "/{id}",
+    urlParamKeys: ["id"],
+    catchNotFound: true,
+  });
 
   public create = this.makeRequest<OrganizationRepresentation, { id: string }>({
     method: "POST",
@@ -71,7 +98,10 @@ export class Organizations extends Resource<{ realm?: string }> {
     urlParamKeys: ["id"],
   });
 
-  public listMembers = this.makeRequest<MemberQuery, UserRepresentation[]>({
+  public listMembers = this.makeRequest<
+    MemberQuery,
+    OrganizationMemberRepresentation[]
+  >({
     method: "GET",
     path: "/{orgId}/members",
     urlParamKeys: ["orgId"],
@@ -96,6 +126,25 @@ export class Organizations extends Resource<{ realm?: string }> {
     urlParamKeys: ["orgId", "userId"],
   });
 
+  public getMember = this.makeRequest<
+    { orgId: string; userId: string },
+    OrganizationMemberRepresentation
+  >({
+    method: "GET",
+    path: "/{orgId}/members/{userId}",
+    urlParamKeys: ["orgId", "userId"],
+  });
+
+  public updateMembershipType = this.makeUpdateRequest<
+    { orgId: string; userId: string },
+    MembershipType,
+    void
+  >({
+    method: "PUT",
+    path: "/{orgId}/members/{userId}/membership-type",
+    urlParamKeys: ["orgId", "userId"],
+  });
+
   public memberOrganizations = this.makeRequest<
     { userId: string },
     OrganizationRepresentation[]
@@ -105,19 +154,30 @@ export class Organizations extends Resource<{ realm?: string }> {
     urlParamKeys: ["userId"],
   });
 
-  public invite = this.makeUpdateRequest<{ orgId: string }, FormData>({
+  public invite = this.makeUpdateRequest<
+    { orgId: string; clientId?: string },
+    FormData
+  >({
     method: "POST",
     path: "/{orgId}/members/invite-user",
     urlParamKeys: ["orgId"],
+    queryParamKeys: ["clientId"],
+    keyTransform: {
+      clientId: "client_id",
+    },
   });
 
   public inviteExistingUser = this.makeUpdateRequest<
-    { orgId: string },
+    { orgId: string; clientId?: string },
     FormData
   >({
     method: "POST",
     path: "/{orgId}/members/invite-existing-user",
     urlParamKeys: ["orgId"],
+    queryParamKeys: ["clientId"],
+    keyTransform: {
+      clientId: "client_id",
+    },
   });
 
   public listIdentityProviders = this.makeRequest<
@@ -136,6 +196,16 @@ export class Organizations extends Resource<{ realm?: string }> {
     payloadKey: "alias",
   });
 
+  public updateIdentityProviderLink = this.makeUpdateRequest<
+    { orgId: string; alias: string },
+    OrganizationIdentityProviderLinkRepresentation,
+    void
+  >({
+    method: "PUT",
+    path: "/{orgId}/identity-providers/{alias}",
+    urlParamKeys: ["orgId", "alias"],
+  });
+
   public unLinkIdp = this.makeRequest<{ orgId: string; alias: string }, string>(
     {
       method: "DELETE",
@@ -143,4 +213,43 @@ export class Organizations extends Resource<{ realm?: string }> {
       urlParamKeys: ["orgId", "alias"],
     },
   );
+
+  // Organization Invitations Management
+  public listInvitations = this.makeRequest<
+    InvitationQuery,
+    OrganizationInvitationRepresentation[]
+  >({
+    method: "GET",
+    path: "/{orgId}/invitations",
+    urlParamKeys: ["orgId"],
+  });
+
+  public findInvitation = this.makeRequest<
+    { orgId: string; invitationId: string },
+    OrganizationInvitationRepresentation
+  >({
+    method: "GET",
+    path: "/{orgId}/invitations/{invitationId}",
+    urlParamKeys: ["orgId", "invitationId"],
+  });
+
+  public resendInvitation = this.makeRequest<
+    { orgId: string; invitationId: string },
+    void
+  >({
+    method: "POST",
+    path: "/{orgId}/invitations/{invitationId}/resend",
+    urlParamKeys: ["orgId", "invitationId"],
+  });
+
+  public deleteInvitation = this.makeRequest<
+    { orgId: string; invitationId: string },
+    void
+  >({
+    method: "DELETE",
+    path: "/{orgId}/invitations/{invitationId}",
+    urlParamKeys: ["orgId", "invitationId"],
+  });
+
+  public groups = (orgId: string) => new Groups(this.#client, orgId);
 }

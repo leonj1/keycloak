@@ -16,7 +16,12 @@
  */
 package org.keycloak.services.managers;
 
-import org.jboss.logging.Logger;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import org.keycloak.authentication.AuthenticationProcessor;
 import org.keycloak.common.util.Time;
 import org.keycloak.device.DeviceActivityManager;
@@ -29,13 +34,10 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
+import org.keycloak.protocol.oidc.scope.ParameterizedScopeTypeProvider;
 import org.keycloak.services.ServicesLogger;
 
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import org.jboss.logging.Logger;
 
 
 /**
@@ -69,6 +71,10 @@ public class UserSessionManager {
         if (offlineClientSession == null) {
             offlineClientSession = createOfflineClientSession(user, clientSession, offlineUserSession);
             offlineClientSession.removeNote(AuthenticationProcessor.FIRST_OFFLINE_ACCESS);
+        } else {
+            // keep a reused offline client session's identity pins in sync with the online one
+            ParameterizedScopeTypeProvider.syncPinnedIdentities(clientSession, offlineClientSession);
+            offlineClientSession.setTimestamp(clientSession.getTimestamp());
         }
     }
 

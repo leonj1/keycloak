@@ -24,8 +24,8 @@ import {
   AddRoleMappingModal,
   FilterType,
 } from "./AddRoleMappingModal";
-import { deleteMapping, getEffectiveRoles, getMapping } from "./queries";
-import { getEffectiveClientRoles } from "./resource";
+import { deleteMapping, getMapping } from "./queries";
+import { getAllEffectiveRoles } from "./resource";
 
 import "./role-mapping.css";
 
@@ -44,26 +44,72 @@ export const mapRoles = (
   assignedRoles: Row[],
   effectiveRoles: Row[],
   hide: boolean,
-) => [
-  ...(hide
-    ? assignedRoles.map((row) => ({
-        id: row.role.id,
-        ...row,
-        role: {
-          ...row.role,
-          isInherited: false,
-        },
-      }))
-    : effectiveRoles.map((row) => ({
-        id: row.role.id,
-        ...row,
-        role: {
-          ...row.role,
-          isInherited:
-            assignedRoles.find((r) => r.role.id === row.role.id) === undefined,
-        },
-      }))),
-];
+) => {
+  if (hide) {
+    return assignedRoles.map((row) => ({
+      id: row.role.id,
+      ...row,
+      role: {
+        ...row.role,
+        isInherited: false,
+      },
+    }));
+  }
+
+  const assignedRoleIds = new Set(
+    assignedRoles.filter((r) => r.role.id).map((r) => r.role.id),
+  );
+  const effectiveRoleCountMap = new Map<string, number>();
+  effectiveRoles.forEach((row) => {
+    if (row.role.id) {
+      effectiveRoleCountMap.set(
+        row.role.id,
+        (effectiveRoleCountMap.get(row.role.id) || 0) + 1,
+      );
+    }
+  });
+
+  const result: Row[] = [];
+  const seenRoleIds = new Set<string>();
+
+  effectiveRoles.forEach((row) => {
+    if (row.role.id && !seenRoleIds.has(row.role.id)) {
+      seenRoleIds.add(row.role.id);
+      const isAssigned = assignedRoleIds.has(row.role.id);
+      const effectiveCount = effectiveRoleCountMap.get(row.role.id) || 0;
+
+      if (isAssigned && effectiveCount > 1) {
+        result.push({
+          id: `${row.role.id}-direct`,
+          ...row,
+          role: {
+            ...row.role,
+            isInherited: false,
+          },
+        });
+        result.push({
+          id: `${row.role.id}-inherited`,
+          ...row,
+          role: {
+            ...row.role,
+            isInherited: true,
+          },
+        });
+      } else {
+        result.push({
+          id: row.role.id,
+          ...row,
+          role: {
+            ...row.role,
+            isInherited: !isAssigned,
+          },
+        });
+      }
+    }
+  });
+
+  return result;
+};
 
 export const ServiceRole = ({ role, client }: Row) => (
   <>
@@ -84,6 +130,7 @@ type RoleMappingProps = {
   type: ResourcesKey;
   isManager?: boolean;
   save: (rows: Row[]) => Promise<void>;
+  groupsResource?: any;
 };
 
 export const RoleMapping = ({
@@ -92,6 +139,7 @@ export const RoleMapping = ({
   type,
   isManager = true,
   save,
+  groupsResource,
 }: RoleMappingProps) => {
   const { adminClient } = useAdminClient();
 
@@ -112,31 +160,23 @@ export const RoleMapping = ({
   };
 
   const loader = async () => {
-    let effectiveRoles: Row[] = [];
-    let effectiveClientRoles: Row[] = [];
+    let allEffectiveRoles: Row[] = [];
 
     if (!hide) {
-      effectiveRoles = await getEffectiveRoles(adminClient, type, id);
+      const effectiveRoles = await getAllEffectiveRoles(adminClient, {
+        type,
+        id,
+      });
 
-      effectiveClientRoles = (
-        await getEffectiveClientRoles(adminClient, {
-          type,
-          id,
-        })
-      ).map((e) => ({
-        client: { clientId: e.client, id: e.clientId },
-        role: { id: e.id, name: e.role, description: e.description },
+      allEffectiveRoles = effectiveRoles.map((e) => ({
+        ...(e.clientRole && e.client && e.clientId
+          ? { client: { clientId: e.client, id: e.clientId } }
+          : {}),
+        role: { id: e.id, name: e.name, description: e.description },
       }));
-
-      effectiveRoles = effectiveRoles.filter(
-        (role) =>
-          !effectiveClientRoles.some(
-            (clientRole) => clientRole.role.id === role.role.id,
-          ),
-      );
     }
 
-    const roles = await getMapping(adminClient, type, id);
+    const roles = await getMapping(adminClient, type, id, groupsResource);
     const realmRolesMapping =
       roles.realmMappings?.map((role) => ({ role })) || [];
     const clientMapping = Object.values(roles.clientMappings || {})
@@ -151,7 +191,7 @@ export const RoleMapping = ({
     return [
       ...mapRoles(
         [...clientMapping, ...realmRolesMapping],
-        [...effectiveClientRoles, ...effectiveRoles],
+        allEffectiveRoles,
         hide,
       ),
     ];
@@ -188,6 +228,7 @@ export const RoleMapping = ({
           name={name}
           onAssign={assignRoles}
           onClose={() => setShowAssign(false)}
+          groupsResource={groupsResource}
         />
       )}
       <DeleteConfirm />

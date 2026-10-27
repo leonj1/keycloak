@@ -17,7 +17,12 @@
 
 package org.keycloak.protocol.oidc.installation;
 
-import static org.keycloak.protocol.util.ClientCliInstallationUtil.quote;
+import java.net.URI;
+import java.util.Map;
+
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.Config;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
@@ -26,15 +31,12 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.ClientInstallationProvider;
 import org.keycloak.protocol.oidc.OIDCLoginProtocol;
 
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import java.net.URI;
-import java.util.Map;
+import static org.keycloak.protocol.util.ClientCliInstallationUtil.quote;
 
 public class KeycloakOIDCJbossSubsystemClientCliInstallation implements ClientInstallationProvider {
 
     @Override
-    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI baseUri) {
+    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI baseUri, boolean includeSecrets) {
         String deploymentName = "WAR MODULE NAME.war";
         StringBuilder builder = new StringBuilder();
         
@@ -60,7 +62,7 @@ public class KeycloakOIDCJbossSubsystemClientCliInstallation implements ClientIn
 
 
         if (KeycloakOIDCClientInstallation.showClientCredentialsAdapterConfig(client)) {
-            Map<String, Object> adapterConfig = KeycloakOIDCClientInstallation.getClientCredentialsAdapterConfig(session, client);
+            Map<String, Object> adapterConfig = KeycloakOIDCClientInstallation.getClientCredentialsAdapterConfig(session, client, includeSecrets);
             for (Map.Entry<String, Object> entry : adapterConfig.entrySet()) {
                 builder.append("/subsystem=keycloak/secure-deployment=").append(quote(deploymentName)).append("/")
                        .append("credential=").append(entry.getKey()).append(":add(value=").append(entry.getValue())

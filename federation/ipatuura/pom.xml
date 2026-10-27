@@ -27,7 +27,7 @@
 
     <artifactId>keycloak-ipatuura-federation</artifactId>
     <name>Keycloak Ipatuura Federation</name>
-    <description />
+    <description>Keycloak Ipatuura Federation</description>
 
     <dependencies>
         <dependency>
@@ -58,6 +58,16 @@
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-services</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

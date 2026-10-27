@@ -17,10 +17,10 @@
 
 package org.keycloak.representations.idm;
 
-import org.keycloak.representations.idm.authorization.ResourceServerRepresentation;
-
 import java.util.List;
 import java.util.Map;
+
+import org.keycloak.representations.idm.authorization.ResourceServerRepresentation;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -52,6 +52,7 @@ public class ClientRepresentation {
     protected Boolean implicitFlowEnabled;
     protected Boolean directAccessGrantsEnabled;
     protected Boolean serviceAccountsEnabled;
+    protected String serviceAccountUserId;
     protected Boolean authorizationServicesEnabled;
     @Deprecated
     protected Boolean directGrantsOnly;
@@ -274,6 +275,14 @@ public class ClientRepresentation {
 
     public void setServiceAccountsEnabled(Boolean serviceAccountsEnabled) {
         this.serviceAccountsEnabled = serviceAccountsEnabled;
+    }
+
+    public String getServiceAccountUserId() {
+        return serviceAccountUserId;
+    }
+
+    public void setServiceAccountUserId(String serviceAccountUserId) {
+        this.serviceAccountUserId = serviceAccountUserId;
     }
 
     public Boolean getAuthorizationServicesEnabled() {

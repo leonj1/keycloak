@@ -1,21 +1,20 @@
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { goToIdentityProviders } from "../utils/sidebar";
-import { clickTableRowItem } from "../utils/table";
+import adminClient from "../utils/AdminClient.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { goToIdentityProviders } from "../utils/sidebar.ts";
+import { clickTableRowItem } from "../utils/table.ts";
 import {
   addAuthConstraints,
   addMapper,
-  clickCancelMapper,
   clickSaveMapper,
   createSAMLProvider,
   goToMappersTab,
-} from "./main";
-import { editSAMLSettings } from "./saml";
+} from "./main.ts";
+import { editSAMLSettings } from "./saml.ts";
 
-test.describe("SAML identity provider test", () => {
+test.describe.serial("SAML identity provider test", () => {
   const samlProviderName = "saml";
   const samlDisplayName = "saml";
 
@@ -37,7 +36,7 @@ test.describe("SAML identity provider test", () => {
   });
 });
 
-test.describe("SAML identity provider test", () => {
+test.describe.serial("SAML identity provider test", () => {
   const samlProviderName = "SAML v2.0";
   const classRefName = "acClassRef-1";
   const declRefName = "acDeclRef-1";
@@ -79,8 +78,11 @@ test.describe("SAML identity provider test", () => {
       await goToMappersTab(page);
       await addMapper(page, type, name);
       await clickSaveMapper(page);
-      await assertNotificationMessage(page, "Mapper created successfully.");
-      await clickCancelMapper(page);
+      await expect(
+        page.getByRole("row", {
+          name: new RegExp(name, "i"),
+        }),
+      ).toBeVisible();
     });
   }
 

@@ -1,6 +1,6 @@
-import { Page, expect } from "@playwright/test";
-import { clickRowKebabItem } from "../utils/table";
-import { selectItem } from "../utils/form";
+import { type Page, expect } from "@playwright/test";
+import { clickRowKebabItem } from "../utils/table.ts";
+import { selectItem } from "../utils/form.ts";
 
 export async function goToClientPoliciesTab(page: Page) {
   await page.getByTestId("rs-clientPolicies-tab").click();
@@ -75,8 +75,7 @@ export async function clickAddCondition(page: Page) {
 }
 
 async function selectConditionType(page: Page, condition: string) {
-  await page.locator("#provider").click();
-  await page.getByTestId(condition).click();
+  await selectItem(page, "#provider", page.getByTestId(condition));
 }
 
 export async function clickCancelConditionButton(page: Page) {

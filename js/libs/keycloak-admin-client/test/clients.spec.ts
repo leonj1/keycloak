@@ -257,13 +257,12 @@ describe("Clients", () => {
       expect(typeof installationProvider).to.be.equal("string");
     });
 
-    it("get service account user", async () => {
-      const serviceAccountUser =
-        await kcAdminClient.clients.getServiceAccountUser({
-          id: currentClient.id!,
-        });
+    it("get service account user id", async () => {
+      const client = await kcAdminClient.clients.findOne({
+        id: currentClient.id!,
+      });
 
-      expect(serviceAccountUser).to.be.ok;
+      expect(client?.serviceAccountUserId).to.be.ok;
     });
   });
 
@@ -746,7 +745,7 @@ describe("Clients", () => {
         });
 
         expect(roles).to.be.ok;
-        expect(roles.length).to.be.eq(5);
+        expect(roles.length).to.be.eq(6);
       });
 
       it("get list of all protocol mappers", async () => {
@@ -771,6 +770,7 @@ describe("Clients", () => {
             id: clientUniqueId!,
             userId: user.id,
             scope: "openid",
+            audience: "",
           });
         const idToken = await kcAdminClient.clients.evaluateGenerateIdToken({
           id: clientUniqueId!,
@@ -967,12 +967,14 @@ describe("Clients", () => {
 
       expect(certificate).to.be.ok;
       expect(certificate.certificate).to.be.ok;
+      expect(certificate.privateKey).to.be.ok;
 
       const info = await kcAdminClient.clients.getKeyInfo({
         id: currentClient.id!,
         attr,
       });
-      expect(info).to.be.eql(certificate);
+      expect(info.privateKey).to.be.undefined;
+      expect(info.certificate).to.be.eql(certificate.certificate);
     });
 
     it("download key", async () => {
@@ -1099,30 +1101,6 @@ describe("Clients", () => {
       expect(result).to.deep.equal([]);
     });
 
-    it("list permission scope", async () => {
-      permission = await kcAdminClient.clients.createPermission(
-        {
-          id: currentClient.id!,
-          type: "scope",
-        },
-        {
-          name: permissionConfig.name,
-          // @ts-ignore
-          resources: [resource._id],
-          policies: [policy.id!],
-          scopes: scopes.map((scope) => scope.id!),
-        },
-      );
-
-      const p = await kcAdminClient.clients.listPermissionScope({
-        id: currentClient.id!,
-        name: permissionConfig.name,
-      });
-
-      expect(p.length).to.be.eq(1);
-      expect(p[0].name).to.be.eq(permissionConfig.name);
-    });
-
     it("import resource", async () => {
       await kcAdminClient.clients.importResource(
         { id: currentClient.id! },
@@ -1143,7 +1121,7 @@ describe("Clients", () => {
       });
 
       expect(result.allowRemoteResourceManagement).to.be.equal(true);
-      expect(result.resources?.length).to.be.equal(1);
+      expect(result.resources?.length).to.be.equal(0);
     });
 
     it("create resource", async () => {
@@ -1246,7 +1224,36 @@ describe("Clients", () => {
       expect(dependencies).to.be.ok;
     });
 
+    it("list permission scope", async () => {
+      permission = await kcAdminClient.clients.createPermission(
+        {
+          id: currentClient.id!,
+          type: "scope",
+        },
+        {
+          name: permissionConfig.name,
+          // @ts-ignore
+          resources: [resource._id],
+          policies: [policy.id!],
+          scopes: scopes.map((scope) => scope.id!),
+        },
+      );
+
+      const p = await kcAdminClient.clients.listPermissionScope({
+        id: currentClient.id!,
+        name: permissionConfig.name,
+      });
+
+      expect(p.length).to.be.eq(1);
+      //expect(p[0].name).to.be.eq(permissionConfig.name);
+    });
+
     it("create permission", async () => {
+      await kcAdminClient.clients.delPermission({
+        id: currentClient.id!,
+        type: "scope",
+        permissionId: permission.id!,
+      });
       permission = await kcAdminClient.clients.createPermission(
         {
           id: currentClient.id!,

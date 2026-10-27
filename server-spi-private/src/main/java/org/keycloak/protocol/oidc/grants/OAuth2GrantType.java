@@ -17,14 +17,14 @@
 
 package org.keycloak.protocol.oidc.grants;
 
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MultivaluedHashMap;
 import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
-
-import java.util.Collections;
-import java.util.Map;
-import java.util.Set;
 
 import org.keycloak.OAuth2Constants;
 import org.keycloak.common.ClientConnection;
@@ -33,9 +33,12 @@ import org.keycloak.events.EventType;
 import org.keycloak.http.HttpRequest;
 import org.keycloak.http.HttpResponse;
 import org.keycloak.models.ClientModel;
+import org.keycloak.models.Constants;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
+import org.keycloak.protocol.LoginProtocol;
 import org.keycloak.provider.Provider;
+import org.keycloak.services.clientpolicy.ClientPolicyException;
 import org.keycloak.services.cors.Cors;
 
 /**
@@ -61,6 +64,29 @@ public interface OAuth2GrantType extends Provider {
     }
 
     /**
+     * Name of the "token" parameters, which this grant type supports. As 'token' parameter is considered a parameter containing possibly long
+     * token (for example big JWT or SAML assertion) with unbounded data (For example possibly big amount of roles inside JWT).
+     * Example of such parameter is for example 'subject_token' parameter case of token exchange grant.
+     *
+     * @return set of strings with the "token" parameters supported by this grant type
+     */
+    Set<String> getTokenParameterNames();
+
+    /**
+     * @return true if the grant type is intended to be used only by confidential clients.
+     */
+    default boolean isConfidentialOnlyGrantType() {
+        return false;
+    }
+
+    /**
+     * Pre-process client policies for the given grant
+     */
+    default void preProcess(KeycloakSession session, MultivaluedMap<String, String> formParams) throws ClientPolicyException {
+        // do nothing
+    }
+
+    /**
      * Processes grant request.
      * @param context grant request context
      *
@@ -68,7 +94,8 @@ public interface OAuth2GrantType extends Provider {
      */
     Response process(Context context);
 
-    public static class Context {
+
+    class Context {
         protected KeycloakSession session;
         protected RealmModel realm;
         protected ClientModel client;
@@ -83,6 +110,7 @@ public interface OAuth2GrantType extends Provider {
         protected Cors cors;
         protected Object tokenManager;
         protected String grantType;
+        protected LoginProtocol protocol;
 
         public Context(KeycloakSession session, Object clientConfig, Map<String, String> clientAuthAttributes,
                 MultivaluedMap<String, String> formParams, EventBuilder event, Cors cors, Object tokenManager) {
@@ -100,6 +128,10 @@ public interface OAuth2GrantType extends Provider {
             this.cors = cors;
             this.tokenManager = tokenManager;
             this.grantType = formParams.getFirst(OAuth2Constants.GRANT_TYPE);
+            if (this.client != null) {
+                String protocolName = this.client.getProtocol() != null ? this.client.getProtocol() : Constants.OIDC_PROTOCOL;
+                this.protocol = session.getProvider(LoginProtocol.class, protocolName);
+            }
         }
 
         public void setFormParams(MultivaluedHashMap<String, String> formParams) {
@@ -108,6 +140,10 @@ public interface OAuth2GrantType extends Provider {
 
         public void setClient(ClientModel client) {
             this.client = client;
+            if (client != null) {
+                String protocolName = this.client.getProtocol() != null ? this.client.getProtocol() : Constants.OIDC_PROTOCOL;
+                this.protocol = session.getProvider(LoginProtocol.class, protocolName);
+            }
         }
 
         public void setClientConfig(Object clientConfig) {

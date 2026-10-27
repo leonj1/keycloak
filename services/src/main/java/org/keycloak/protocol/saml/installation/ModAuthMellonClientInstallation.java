@@ -17,10 +17,18 @@
 
 package org.keycloak.protocol.saml.installation;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.Config;
 import org.keycloak.common.util.PemUtils;
 import org.keycloak.models.ClientModel;
@@ -30,14 +38,8 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.ClientInstallationProvider;
 import org.keycloak.protocol.saml.SamlClient;
 import org.keycloak.protocol.saml.SamlProtocol;
-
 import org.keycloak.protocol.saml.SamlService;
-import jakarta.ws.rs.core.Response;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.net.URI;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import org.keycloak.representations.idm.ComponentRepresentation;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -45,7 +47,7 @@ import java.util.zip.ZipOutputStream;
  */
 public class ModAuthMellonClientInstallation implements ClientInstallationProvider {
     @Override
-    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI serverBaseUri) {
+    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI serverBaseUri, boolean includeSecrets) {
         SamlClient samlClient = new SamlClient(client);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ZipOutputStream zip = new ZipOutputStream(baos);
@@ -64,7 +66,7 @@ public class ModAuthMellonClientInstallation implements ClientInstallationProvid
             if (samlClient.requiresClientSignature()) {
                 if (samlClient.getClientSigningPrivateKey() != null) {
                     zip.putNextEntry(new ZipEntry(clientDirName + "/client-private-key.pem"));
-                    zip.write(createClientSigningPrivateKeyRfc7468Representation(samlClient.getClientSigningPrivateKey()));
+                    zip.write(createClientSigningPrivateKeyRfc7468Representation(includeSecrets ? samlClient.getClientSigningPrivateKey() : ComponentRepresentation.SECRET_VALUE));
                     zip.closeEntry();
                 }
                 if (samlClient.getClientSigningCertificate() != null) {

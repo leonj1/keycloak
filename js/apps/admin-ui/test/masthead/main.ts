@@ -1,4 +1,4 @@
-import { Page, expect } from "@playwright/test";
+import { type Page, expect } from "@playwright/test";
 
 function getMobileUserDropdownSelector(page: Page) {
   return page.getByTestId("options-kebab-toggle");
@@ -51,5 +51,7 @@ export async function clickGlobalHelp(page: Page) {
 }
 
 export async function toggleGlobalHelp(page: Page) {
-  await page.locator("#enableHelp").click({ force: true });
+  // Click the visible label rather than the hidden <input>, so Playwright
+  // waits for the dropdown to finish rendering before clicking.
+  await page.locator("label[for='enableHelp']").click();
 }

@@ -16,32 +16,26 @@
  */
 package org.keycloak.testsuite.utils.arquillian;
 
-import org.jboss.arquillian.test.spi.TestClass;
-import org.jboss.logging.Logger;
-import org.jboss.shrinkwrap.api.Archive;
-import org.jboss.shrinkwrap.api.Node;
-import org.jboss.shrinkwrap.api.asset.Asset;
-import org.jboss.shrinkwrap.api.asset.StringAsset;
-import org.jboss.shrinkwrap.api.spec.WebArchive;
-import org.keycloak.representations.adapters.config.AdapterConfig;
-import org.keycloak.testsuite.utils.io.IOUtil;
-import org.keycloak.util.JsonSerialization;
-import org.w3c.dom.DOMException;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
-
-import javax.xml.xpath.XPath;
-import javax.xml.xpath.XPathConstants;
-import javax.xml.xpath.XPathExpression;
-import javax.xml.xpath.XPathExpressionException;
-import javax.xml.xpath.XPathFactory;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Optional;
+
+import org.keycloak.representations.adapters.config.AdapterConfig;
+import org.keycloak.testsuite.utils.io.IOUtil;
+import org.keycloak.util.JsonSerialization;
+
+import org.jboss.logging.Logger;
+import org.jboss.shrinkwrap.api.Archive;
+import org.jboss.shrinkwrap.api.Node;
+import org.jboss.shrinkwrap.api.asset.Asset;
+import org.jboss.shrinkwrap.api.asset.StringAsset;
+import org.jboss.shrinkwrap.api.spec.WebArchive;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
 
 import static org.keycloak.testsuite.util.ServerURLs.getAppServerContextRoot;
 import static org.keycloak.testsuite.util.ServerURLs.getAuthServerContextRoot;
@@ -168,7 +162,7 @@ public class DeploymentArchiveProcessorUtils {
                     log.infof("Appending '%s' tag with Jakarta application class to '%s'\n", SERVLET_CLASS_TAG, archive.getName());
                 } else if (servletClassCount == 1) {
                     modifyDocElementValue(doc, SERVLET_CLASS_TAG, JAVAX_APPLICATION, JAKARTA_APPLICATION);
-                    log.infof("Modifying 'servlet-class' tag to use Jakarta application class in '%s'\n", SERVLET_CLASS_TAG, archive.getName());
+                    log.infof("Modifying '%s' tag to use Jakarta application class in '%s'\n", SERVLET_CLASS_TAG, archive.getName());
                 } else {
                     log.error(String.format("Invalid count of '%s' tags for '%s'\n", SERVLET_CLASS_TAG, archive.getName()));
                     return;

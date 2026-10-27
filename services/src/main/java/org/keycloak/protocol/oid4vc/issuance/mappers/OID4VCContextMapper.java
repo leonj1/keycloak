@@ -17,17 +17,21 @@
 
 package org.keycloak.protocol.oid4vc.issuance.mappers;
 
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.UserSessionModel;
-import org.keycloak.protocol.ProtocolMapper;
-import org.keycloak.protocol.oid4vc.model.VerifiableCredential;
-import org.keycloak.provider.ProviderConfigProperty;
-
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.UserSessionModel;
+import org.keycloak.models.oid4vci.CredentialScopeModel;
+import org.keycloak.protocol.ProtocolMapper;
+import org.keycloak.protocol.oid4vc.model.VerifiableCredential;
+import org.keycloak.provider.ProviderConfigProperty;
+
+import static org.keycloak.VCFormat.MSO_MDOC;
 
 /**
  * Allows to add the context to the credential subject
@@ -57,8 +61,29 @@ public class OID4VCContextMapper extends OID4VCMapper {
         return CONFIG_PROPERTIES;
     }
 
-    public void setClaimsForCredential(VerifiableCredential verifiableCredential,
-                                       UserSessionModel userSessionModel) {
+    /**
+     * this claim is not added by default to the metadata
+     */
+    @Override
+    public boolean includeInMetadata() {
+        return Optional.ofNullable(mapperModel.getConfig().get(CredentialScopeModel.VC_INCLUDE_IN_METADATA))
+                       .map(Boolean::parseBoolean)
+                       .orElse(false);
+    }
+
+    @Override
+    public boolean supportsCredentialFormat(String credentialFormat) {
+        // mDoc is not JSON-LD and has no VC-level @context member.
+        return !MSO_MDOC.equals(credentialFormat);
+    }
+
+    @Override
+    public List<String> getMetadataAttributePath() {
+        return List.of(TYPE_KEY);
+    }
+
+    public void setClaim(VerifiableCredential verifiableCredential,
+                         UserSessionModel userSessionModel) {
         // remove duplicates
         Set<String> contexts = new HashSet<>();
         if (verifiableCredential.getContext() != null) {
@@ -69,7 +94,7 @@ public class OID4VCContextMapper extends OID4VCMapper {
     }
 
     @Override
-    public void setClaimsForSubject(Map<String, Object> claims, UserSessionModel userSessionModel) {
+    public void setClaim(Map<String, Object> claims, UserSessionModel userSessionModel) {
         // nothing to do for the mapper.
     }
 

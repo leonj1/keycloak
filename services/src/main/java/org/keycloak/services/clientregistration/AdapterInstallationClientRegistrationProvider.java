@@ -17,13 +17,6 @@
 
 package org.keycloak.services.clientregistration;
 
-import org.keycloak.events.EventBuilder;
-import org.keycloak.events.EventType;
-import org.keycloak.models.ClientModel;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.services.managers.ClientManager;
-import org.keycloak.services.managers.RealmManager;
-
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -31,9 +24,22 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import org.keycloak.events.EventBuilder;
+import org.keycloak.events.EventType;
+import org.keycloak.models.ClientModel;
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.services.managers.ClientManager;
+import org.keycloak.services.managers.RealmManager;
+
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
  */
+
+/**
+ * @deprecated This provider is deprecated for removal since Keycloak 26.8.
+ * Retrieve adapter configuration via the Admin REST API instead.
+ */
+@Deprecated(forRemoval = true, since = "26.8")
 public class AdapterInstallationClientRegistrationProvider implements ClientRegistrationProvider {
 
     private KeycloakSession session;
@@ -54,7 +60,8 @@ public class AdapterInstallationClientRegistrationProvider implements ClientRegi
         auth.requireView(client, true);
 
         ClientManager clientManager = new ClientManager(new RealmManager(session));
-        Object rep = clientManager.toInstallationRepresentation(session.getContext().getRealm(), client, session.getContext().getUri().getBaseUri());
+        Object rep = clientManager.toInstallationRepresentation(session.getContext().getRealm(), client,
+                session.getContext().getUri().getBaseUri(), !auth.isViewOnly());
 
         event.client(client.getClientId()).success();
         return Response.ok(rep).build();

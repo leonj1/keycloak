@@ -17,16 +17,17 @@
 
 package org.keycloak.models;
 
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
 import org.keycloak.component.ComponentModel;
 import org.keycloak.provider.InvalidationHandler.InvalidableObjectType;
 import org.keycloak.provider.Provider;
 import org.keycloak.services.clientpolicy.ClientPolicyManager;
 import org.keycloak.sessions.AuthenticationSessionProvider;
 import org.keycloak.vault.VaultTranscriber;
-
-import java.util.Map;
-import java.util.Set;
-import java.util.function.Function;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -41,7 +42,7 @@ public interface KeycloakSession extends AutoCloseable {
     /**
      * Get dedicated provider instance of provider type clazz that was created for this session.  If one hasn't been created yet,
      * find the factory and allocate by calling ProviderFactory.create(KeycloakSession).  The provider to use is determined
-     * by the "provider" config entry in keycloak-server boot configuration. (keycloak-server.json)
+     * by the "provider" config entry in keycloak-server boot configuration. See the <a href="https://www.keycloak.org/docs/latest/server_development/index.html#_use_available_providers">Server developer guide</a> for the details.
      *
      *
      *
@@ -128,6 +129,18 @@ public interface KeycloakSession extends AutoCloseable {
     Map<String, Object> getAttributes();
 
     /**
+     * Returns whether this session is currently in read-only mode.
+     */
+    boolean isReadOnly();
+
+    /**
+     * Executes the given supplier in read-only mode. The read-only flag is set before invoking the
+     * supplier and restored after the supplier returns. If the supplier returns a Stream, the flag
+     * remains active until the stream is closed, making it safe for lazily consumed streams.
+     */
+    <T> T runAsReadOnly(Supplier<T> supplier);
+
+    /**
      * Invalidates intermediate states of the given objects, both immediately and at the end of this session.
      * @param type Type of the objects to invalidate
      * @param params Parameters used for the invalidation
@@ -203,6 +216,8 @@ public interface KeycloakSession extends AutoCloseable {
     AuthenticationSessionProvider authenticationSessions();
 
     SingleUseObjectProvider singleUseObjects();
+
+    RevokedTokenProvider revokedTokens();
 
     /**
      * Returns the default IDP provider .

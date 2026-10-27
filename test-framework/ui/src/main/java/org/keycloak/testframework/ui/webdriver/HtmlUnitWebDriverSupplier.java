@@ -1,10 +1,28 @@
 package org.keycloak.testframework.ui.webdriver;
 
+import java.util.List;
+
+import org.keycloak.testframework.https.ManagedCertificates;
+import org.keycloak.testframework.injection.DependenciesBuilder;
+import org.keycloak.testframework.injection.Dependency;
+import org.keycloak.testframework.injection.InstanceContext;
+import org.keycloak.testframework.injection.RequestedInstance;
+import org.keycloak.testframework.ui.annotations.InjectWebDriver;
+
 import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.htmlunit.HtmlUnitDriver;
-import org.openqa.selenium.remote.DesiredCapabilities;
 
 public class HtmlUnitWebDriverSupplier extends AbstractWebDriverSupplier {
+
+    @Override
+    public List<Dependency> getDependencies(RequestedInstance<ManagedWebDriver, InjectWebDriver> instanceContext) {
+        return DependenciesBuilder.create(ManagedCertificates.class).build();
+    }
+
+    @Override
+    public ManagedWebDriver getValue(InstanceContext<ManagedWebDriver, InjectWebDriver> instanceContext) {
+        ManagedCertificates managedCerts = instanceContext.getDependency(ManagedCertificates.class);
+        return new ManagedWebDriver(getWebDriver(managedCerts));
+    }
 
     @Override
     public String getAlias() {
@@ -13,15 +31,10 @@ public class HtmlUnitWebDriverSupplier extends AbstractWebDriverSupplier {
 
     @Override
     public WebDriver getWebDriver() {
-        DesiredCapabilities capabilities = new DesiredCapabilities();
-        setCommonCapabilities(capabilities);
+        return getWebDriver(null); // not used
+    }
 
-        capabilities.setBrowserName("htmlunit");
-        capabilities.setCapability(HtmlUnitDriver.DOWNLOAD_IMAGES_CAPABILITY, false);
-        capabilities.setCapability(HtmlUnitDriver.JAVASCRIPT_ENABLED, true);
-
-        HtmlUnitDriver driver = new HtmlUnitDriver(capabilities);
-        driver.getWebClient().getOptions().setCssEnabled(false);
-        return driver;
+    protected WebDriver getWebDriver(ManagedCertificates managedCerts) {
+        return DriverUtils.createHtmlUnitDriver(managedCerts);
     }
 }

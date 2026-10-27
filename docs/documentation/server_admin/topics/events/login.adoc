@@ -1,4 +1,5 @@
 
+[#auditing-user-events]
 === Auditing user events
 
 You can record and view every event that affects users. {project_name} triggers login events for actions such as successful user login, a user entering an incorrect password, or a user account updating. By default, {project_name} does not store or display events in the Admin Console. Only the error events are logged to the Admin Console and the server’s log file.
@@ -184,7 +185,7 @@ To change the log level used by the Logging Event listener, add the following:
 
 [source,bash]
 ----
-bin/kc.[sh|bat] start --spi-events-listener-jboss-logging-success-level=info --spi-events-listener--jboss-logging--error-level=error
+bin/kc.[sh|bat] start --spi-events-listener--jboss-logging--success-level=info --spi-events-listener--jboss-logging--error-level=error
 ----
 
 The valid values for log levels are `debug`, `info`, `warn`, `error`, and `fatal`.
@@ -226,7 +227,7 @@ To enable the Email Listener:
 .Event listeners
 image:images/event-listeners.png[Event listeners]
 
-You can exclude events by using the `--spi-events-listener--email--exclude-events` argument. For example:
+You can exclude events by using the `+--spi-events-listener--email--exclude-events+` argument. For example:
 
 [source,bash]
 ----

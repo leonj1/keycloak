@@ -1,27 +1,29 @@
 import { expect, test } from "@playwright/test";
-import path from "path";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { assertRequiredFieldError } from "../utils/form";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { assertModalTitle, confirmModal } from "../utils/modal";
-import { goToClients, goToRealm } from "../utils/sidebar";
+import adminClient from "../utils/AdminClient.ts";
+import { assertRequiredFieldError } from "../utils/form.ts";
+import { chooseFile } from "../utils/file-chooser.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { assertModalTitle, confirmModal } from "../utils/modal.ts";
+import { goToClients, goToRealm } from "../utils/sidebar.ts";
 import {
+  assertRowExists,
   clearAllFilters,
+  clickNextPageButton,
   clickRowKebabItem,
   getRowByCellText,
   searchItem,
-} from "../utils/table";
+} from "../utils/table.ts";
 import {
   cancel,
   clientCapabilityConfig,
   continueNext,
   createClient,
   save,
-} from "./utils";
+} from "./utils.ts";
 
-test.describe("Clients test", () => {
+test.describe.serial("Clients test", () => {
   const realmName = `clients-realm-${uuid()}`;
   const clientId = `clientId`;
   const placeHolder = "Search for client";
@@ -119,7 +121,37 @@ test.describe("Clients test", () => {
     await expect(getRowByCellText(page, "account")).toBeVisible();
   });
 
-  test.describe("Clients import", () => {
+  test.describe.serial("Search from a later page", () => {
+    const pagedClient = "paged-client";
+    const otherClient = "other-client";
+
+    // One more than the default page size, so the results span two pages
+    test.beforeAll(async () => {
+      for (let i = 0; i < 11; i++) {
+        await adminClient.createClient({
+          clientId: `${pagedClient}-${i}`,
+          realm: realmName,
+        });
+      }
+      await adminClient.createClient({
+        clientId: otherClient,
+        realm: realmName,
+      });
+    });
+
+    test("Searching while on the second page shows the matches", async ({
+      page,
+    }) => {
+      await searchItem(page, placeHolder, pagedClient);
+      await clickNextPageButton(page);
+
+      await searchItem(page, placeHolder, otherClient);
+
+      await assertRowExists(page, otherClient);
+    });
+  });
+
+  test.describe.serial("Clients import", () => {
     test.beforeAll(() =>
       adminClient.createClient({
         clientId: "identical",
@@ -132,19 +164,7 @@ test.describe("Clients test", () => {
 
     test("Import client", async ({ page }) => {
       await page.getByTestId("importClient").click();
-
-      const fileChooserPromise = page.waitForEvent("filechooser");
-      await page.getByText("Browse...").click();
-      const fileChooser = await fileChooserPromise;
-      await fileChooser.setFiles(
-        new URL(
-          path.join(
-            path.dirname(import.meta.url),
-            "../utils/files/import-identical-client.json",
-          ),
-        ).pathname,
-      );
-
+      await chooseFile(page, "../utils/files/import-identical-client.json");
       await save(page);
       await assertNotificationMessage(
         page,

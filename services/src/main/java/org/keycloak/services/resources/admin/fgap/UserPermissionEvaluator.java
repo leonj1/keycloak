@@ -16,13 +16,14 @@
  */
 package org.keycloak.services.resources.admin.fgap;
 
+import java.util.Map;
+
+import jakarta.ws.rs.ForbiddenException;
+
 import org.keycloak.authorization.fgap.AdminPermissionsSchema;
 import org.keycloak.models.AdminRoles;
 import org.keycloak.models.ClientModel;
-import org.keycloak.models.ImpersonationConstants;
 import org.keycloak.models.UserModel;
-
-import java.util.Map;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -56,6 +57,23 @@ public interface UserPermissionEvaluator {
      * of the group chain the user is associated with.
      */
     boolean canManage(UserModel user);
+
+    /**
+     * Throws ForbiddenException if {@link #canResetPassword(UserModel)} returns {@code false}.
+     */
+    default void requireResetPassword(UserModel user) {
+        if (!canResetPassword(user)) {
+            throw new ForbiddenException();
+        }
+    }
+
+    /**
+     * Returns {@code true} if the caller has permission to {@link org.keycloak.authorization.fgap.AdminPermissionsSchema#RESET_PASSWORD}
+     * for the given user. Default implementation falls back to {@link #canManage(UserModel)} for backward compatibility.
+     */
+    default boolean canResetPassword(UserModel user) {
+        return canManage(user);
+    }
 
     /**
      * Throws ForbiddenException if {@link #canQuery()} returns {@code false}.
@@ -112,13 +130,34 @@ public interface UserPermissionEvaluator {
     boolean canImpersonate();
 
     /**
-     * Returns {@code true} if the caller has the {@link ImpersonationConstants#IMPERSONATION_ROLE}.
+     * Returns {@code true} if the caller has the {@link AdminRoles#IMPERSONATION} role.
      * <p/>
-     * NOTE: If requester is provided, it's clientId is added to evaluation context.
+     * NOTE: If requester is provided, its clientId is added to evaluation context.
      * <p/>
      * Or if it has a permission to {@link AdminPermissionsSchema#IMPERSONATE} the user.
      */
     boolean canImpersonate(UserModel user, ClientModel requester);
+
+    /**
+     * Throws ForbiddenException if {@link #canDelegate(UserModel)} returns {@code false}.
+     */
+    default void requireDelegate(UserModel user) {
+        if (!canDelegate(user)) {
+            throw new ForbiddenException();
+        }
+    }
+
+    /**
+     * Returns {@code true} if the caller has a permission to {@link AdminPermissionsSchema#DELEGATE} users.
+     */
+    default boolean canDelegate() {
+        return canDelegate((UserModel) null);
+    }
+
+    /**
+     * Returns {@code true} if the caller has a permission to {@link AdminPermissionsSchema#DELEGATE} the user.
+     */
+    boolean canDelegate(UserModel user);
 
     /**
      * Returns Map with information what access the caller for the provided user has.

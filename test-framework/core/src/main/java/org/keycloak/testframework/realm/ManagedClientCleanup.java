@@ -1,15 +1,21 @@
 package org.keycloak.testframework.realm;
 
-import org.keycloak.admin.client.resource.ClientResource;
-import org.keycloak.representations.idm.ClientRepresentation;
-
 import java.util.LinkedList;
 import java.util.List;
+
+import org.keycloak.admin.client.resource.ClientResource;
+import org.keycloak.representations.idm.ClientRepresentation;
 
 public class ManagedClientCleanup {
 
     private final List<ClientCleanup> cleanupTasks = new LinkedList<>();
 
+    /**
+     * Add a cleanup to be done for the client after the test is completed
+     *
+     * @param clientCleanup the required cleanup
+     * @return
+     */
     public ManagedClientCleanup add(ClientCleanup clientCleanup) {
         this.cleanupTasks.add(clientCleanup);
         return this;
@@ -28,8 +34,7 @@ public class ManagedClientCleanup {
     }
 
     void runCleanupTasks(ClientResource client) {
-        cleanupTasks.forEach(t -> t.cleanup(client));
-        cleanupTasks.clear();
+        CleanupTasks.runAll(cleanupTasks, t -> t.cleanup(client), "client");
     }
 
     public interface ClientCleanup {

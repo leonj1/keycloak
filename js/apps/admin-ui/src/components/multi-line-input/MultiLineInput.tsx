@@ -10,12 +10,13 @@ import { MinusCircleIcon, PlusCircleIcon } from "@patternfly/react-icons";
 import { Fragment, useEffect, useMemo } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { FormErrorText } from "@keycloak/keycloak-ui-shared";
 
 function stringToMultiline(value?: string): string[] {
-  return typeof value === "string" ? value.split("##") : [value || ""];
+  return typeof value === "string" ? value.split("##") : [""];
 }
 
-function toStringValue(formValue: string[]): string {
+function toStringValue(formValue: (string | undefined)[]): string {
   return formValue.join("##");
 }
 
@@ -39,14 +40,20 @@ export const MultiLineInput = ({
   ...rest
 }: MultiLineInputProps) => {
   const { t } = useTranslation();
-  const { register, setValue, control } = useFormContext();
+  const {
+    register,
+    getValues,
+    setValue,
+    control,
+    formState: { errors },
+  } = useFormContext();
   const value = useWatch({
     name,
     control,
     defaultValue: defaultValue || "",
   });
 
-  const fields = useMemo<string[]>(() => {
+  const fields = useMemo<(string | undefined)[]>(() => {
     let values = stringify
       ? stringToMultiline(
           Array.isArray(value) && value.length === 1 ? value[0] : value,
@@ -61,7 +68,7 @@ export const MultiLineInput = ({
         : defaultValue) || [""];
     }
 
-    return values;
+    return values.map((v) => v ?? "");
   }, [value]);
 
   const remove = (index: number) => {
@@ -76,22 +83,52 @@ export const MultiLineInput = ({
     update([...fields.slice(0, index), value, ...fields.slice(index + 1)]);
   };
 
-  const update = (values: string[]) => {
+  const update = (values: (string | undefined)[]) => {
     const fieldValue = values.flatMap((field) => field);
-    setValue(name, stringify ? toStringValue(fieldValue) : fieldValue, {
-      shouldDirty: true,
-      shouldValidate: true,
-    });
+    // Avoid persisting blank-only values as "" / [""]. Empty string attributes
+    // (e.g. post.logout.redirect.uris) break client policy executors such as
+    // secure-redirect-uris-enforcer used by oauth-2-1-for-public-client.
+    const isBlank = fieldValue.every((v) => !(v ?? "").trim());
+    setValue(
+      name,
+      isBlank ? undefined : stringify ? toStringValue(fieldValue) : fieldValue,
+      {
+        shouldDirty: true,
+        shouldValidate: true,
+      },
+    );
   };
 
+  // Only seed the form when there is a non-empty default to persist (see #43949).
+  // Seeding blank values caused empty attributes to be submitted on save (#51315).
+  if (
+    typeof getValues(name) === "undefined" &&
+    fields.some((v) => (v ?? "").trim())
+  ) {
+    update(fields);
+  }
+
   useEffect(() => {
+    // Normalize blank string values left by older UI versions so they are omitted
+    // on save instead of being re-submitted as "".
+    if (stringify && getValues(name) === "") {
+      setValue(name, undefined, { shouldDirty: false, shouldValidate: false });
+    }
+
     register(name, {
       validate: (value) =>
-        isRequired && toStringValue(value || []).length === 0
+        isRequired &&
+        (stringify ? stringToMultiline(value) : value || []).filter(
+          (s: string) => s.trim(),
+        ).length === 0
           ? t("required")
           : undefined,
     });
   }, [register]);
+
+  const getError = () => {
+    return name.split(".").reduce((record: any, key) => record?.[key], errors);
+  };
 
   return (
     <div id={id}>
@@ -122,16 +159,19 @@ export const MultiLineInput = ({
             </InputGroupItem>
           </InputGroup>
           {index === fields.length - 1 && (
-            <Button
-              variant={ButtonVariant.link}
-              onClick={append}
-              tabIndex={-1}
-              aria-label={t("add")}
-              data-testid={`${name}-addValue`}
-              isDisabled={!value || isDisabled}
-            >
-              <PlusCircleIcon /> {t(addButtonLabel || "add")}
-            </Button>
+            <>
+              {getError() && <FormErrorText message={t("required")} />}
+              <Button
+                variant={ButtonVariant.link}
+                onClick={append}
+                tabIndex={-1}
+                aria-label={t("add")}
+                data-testid={`${name}-addValue`}
+                isDisabled={!value || isDisabled}
+              >
+                <PlusCircleIcon /> {t(addButtonLabel || "add")}
+              </Button>
+            </>
           )}
         </Fragment>
       ))}

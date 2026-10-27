@@ -1,5 +1,10 @@
 package org.keycloak.protocol.docker.installation;
 
+import java.net.URI;
+
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.Config;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
@@ -7,10 +12,6 @@ import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.ClientInstallationProvider;
 import org.keycloak.protocol.docker.DockerAuthV2Protocol;
-
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import java.net.URI;
 
 public class DockerRegistryConfigFileInstallationProvider implements ClientInstallationProvider {
 
@@ -40,7 +41,7 @@ public class DockerRegistryConfigFileInstallationProvider implements ClientInsta
     }
 
     @Override
-    public Response generateInstallation(final KeycloakSession session, final RealmModel realm, final ClientModel client, final URI serverBaseUri) {
+    public Response generateInstallation(final KeycloakSession session, final RealmModel realm, final ClientModel client, final URI serverBaseUri, boolean includeSecrets) {
         final StringBuilder responseString = new StringBuilder("auth:\n")
                 .append("  token:\n")
                 .append("    realm: ").append(serverBaseUri).append("/realms/").append(realm.getName()).append("/protocol/").append(DockerAuthV2Protocol.LOGIN_PROTOCOL).append("/auth\n")

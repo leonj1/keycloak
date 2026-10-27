@@ -17,11 +17,32 @@
 
 package org.keycloak.broker.provider.util;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import java.util.zip.GZIPInputStream;
+
+import org.keycloak.common.util.StreamUtil;
+import org.keycloak.connections.httpclient.HttpClientProvider;
+import org.keycloak.connections.httpclient.SafeInputStream;
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.util.JsonSerialization;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.http.Header;
-import org.apache.http.HeaderIterator;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHeaders;
 import org.apache.http.HttpResponse;
@@ -41,33 +62,16 @@ import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.message.BasicNameValuePair;
-import org.keycloak.common.util.Base64;
-import org.keycloak.connections.httpclient.HttpClientProvider;
-import org.keycloak.connections.httpclient.SafeInputStream;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.util.JsonSerialization;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.StringWriter;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-import java.util.zip.GZIPInputStream;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
  * @author Vlastimil Elias (velias at redhat dot com)
  * @author David Klassen (daviddd.kl@gmail.com)
+ *
+ * @deprecated An updated version of SimpleHttp is available in {@link org.keycloak.http.simple.SimpleHttp}. This
+ * version will be deleted in Keycloak 27.0
  */
+@Deprecated
 public class SimpleHttp {
 
     private static final ObjectMapper mapper = new ObjectMapper();
@@ -167,6 +171,31 @@ public class SimpleHttp {
         return null;
     }
 
+    public Map<String, String> getHeaders() {
+        if (headers == null) {
+            return null;
+        }
+        return Collections.unmodifiableMap(headers);
+    }
+
+    public String getParam(String name) {
+        if (params == null) {
+            return null;
+        }
+        return params.get(name);
+    }
+
+    public Map<String, String> getParams() {
+        if (params == null) {
+            return null;
+        }
+        return Collections.unmodifiableMap(params);
+    }
+
+    public Object getEntity() {
+        return entity;
+    }
+
     public SimpleHttp json(Object entity) {
         this.entity = entity;
         return this;
@@ -174,6 +203,11 @@ public class SimpleHttp {
 
     public SimpleHttp entity(HttpEntity entity) {
         this.entity = entity;
+        return this;
+    }
+
+    public SimpleHttp params(Map<String, String> params) {
+        this.params = params;
         return this;
     }
 
@@ -212,7 +246,7 @@ public class SimpleHttp {
 
     public SimpleHttp authBasic(final String username, final String password) {
         final String basicCredentials = String.format("%s:%s", username, password);
-        header("Authorization", "Basic " + Base64.encodeBytes(basicCredentials.getBytes()));
+        header("Authorization", "Basic " + Base64.getEncoder().encodeToString(basicCredentials.getBytes()));
         return this;
     }
 
@@ -382,38 +416,21 @@ public class SimpleHttp {
             if (statusCode == -1) {
                 statusCode = response.getStatusLine().getStatusCode();
 
-                InputStream is;
                 HttpEntity entity = response.getEntity();
                 if (entity != null) {
-                    is = entity.getContent();
-                    contentType = ContentType.getOrDefault(entity);
-                    Charset charset = contentType.getCharset();
-                    try {
-                        HeaderIterator it = response.headerIterator();
-                        while (it.hasNext()) {
-                            Header header = it.nextHeader();
-                            if (header.getName().equals("Content-Encoding") && header.getValue().equals("gzip")) {
-                                is = new GZIPInputStream(is);
-                            }
-                        }
+                    try (InputStream entityStream = entity.getContent()) {
+                        contentType = ContentType.getOrDefault(entity);
+                        Charset charset = contentType.getCharset();
 
-                        is = new SafeInputStream(is, maxConsumedResponseSize);
+                        // TODO: remove manual gzip handling — decompression is already performed by the underlying
+                        // HTTP client (Vert.x/Netty or Apache HttpClient) before the response reaches this code.
+                        Header contentEncoding = response.getFirstHeader(HttpHeaders.CONTENT_ENCODING);
+                        boolean gzip = contentEncoding != null
+                                && ("gzip".equalsIgnoreCase(contentEncoding.getValue()) || "x-gzip".equalsIgnoreCase(contentEncoding.getValue()));
 
-                        try (InputStreamReader reader = charset == null ? new InputStreamReader(is, StandardCharsets.UTF_8) :
-                                new InputStreamReader(is, charset)) {
-
-                            StringWriter writer = new StringWriter();
-
-                            char[] buffer = new char[1024 * 4];
-                            for (int n = reader.read(buffer); n != -1; n = reader.read(buffer)) {
-                                writer.write(buffer, 0, n);
-                            }
-
-                            responseString = writer.toString();
-                        }
-                    } finally {
-                        if (is != null) {
-                            is.close();
+                        InputStream decoded = gzip ? new GZIPInputStream(entityStream) : entityStream;
+                        try (SafeInputStream safe = new SafeInputStream(decoded, maxConsumedResponseSize)) {
+                            responseString = StreamUtil.readString(safe, charset != null ? charset : StandardCharsets.UTF_8);
                         }
                     }
                 }

@@ -16,7 +16,17 @@
  */
 package org.keycloak.services.resources.admin;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import java.io.InputStream;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -35,17 +45,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.Status;
 import jakarta.ws.rs.core.StreamingOutput;
-import org.eclipse.microprofile.openapi.annotations.Operation;
-import org.eclipse.microprofile.openapi.annotations.enums.SchemaType;
-import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
-import org.eclipse.microprofile.openapi.annotations.media.Content;
-import org.eclipse.microprofile.openapi.annotations.media.Schema;
-import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
-import org.eclipse.microprofile.openapi.annotations.tags.Tag;
-import org.jboss.logging.Logger;
-import org.jboss.resteasy.reactive.NoCache;
+
 import org.keycloak.Config;
 import org.keycloak.KeyPairVerifier;
 import org.keycloak.authentication.CredentialRegistrator;
@@ -56,7 +56,9 @@ import org.keycloak.common.Profile;
 import org.keycloak.common.VerificationException;
 import org.keycloak.common.util.PemUtils;
 import org.keycloak.email.EmailAuthenticator;
+import org.keycloak.email.EmailException;
 import org.keycloak.email.EmailTemplateProvider;
+import org.keycloak.events.Details;
 import org.keycloak.events.EventQuery;
 import org.keycloak.events.EventStoreProvider;
 import org.keycloak.events.EventType;
@@ -111,16 +113,21 @@ import org.keycloak.storage.StoreSyncEvent;
 import org.keycloak.utils.GroupUtils;
 import org.keycloak.utils.ProfileHelper;
 import org.keycloak.utils.ReservedCharValidator;
+import org.keycloak.utils.SMTPUtil;
+import org.keycloak.workflow.admin.resource.WorkflowsResource;
 
-import java.io.InputStream;
-import java.security.cert.X509Certificate;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import com.fasterxml.jackson.core.type.TypeReference;
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.enums.SchemaType;
+import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.NoCache;
 
 import static org.keycloak.util.JsonSerialization.readValue;
 
@@ -280,12 +287,23 @@ public class RealmAdminResource {
     }
 
     private void addDefaultClientScope(String clientScopeId, boolean defaultScope) {
-        auth.clients().requireManageClientScopes();
+        // Realm-wide configuration affecting every newly created client, so manage-realm is required
+        // rather than the manage-clients level needed to manage an individual client scope.
+        auth.realm().requireManageRealm();
 
         ClientScopeModel clientScope = realm.getClientScopeById(clientScopeId);
         if (clientScope == null) {
             throw new NotFoundException("Client scope not found");
         }
+
+        // Parameterized scopes currently require the caller to explicitly provide the scope parameter (e.g. "scope_name:value"),
+        // so they cannot be included automatically as default scopes. This restriction may be lifted in the future.
+        if (defaultScope && clientScope.isParameterizedScope()) {
+            throw ErrorResponse.error("Can't assign a Parameterized Scope as a Default Scope", Status.BAD_REQUEST);
+        }
+
+        ClientResource.validateClientScopeAssignment(session, clientScope, defaultScope, realm, true);
+        
         realm.addDefaultClientScope(clientScope, defaultScope);
 
         adminEvent.operation(OperationType.CREATE).resource(ResourceType.CLIENT_SCOPE).resourcePath(session.getContext().getUri()).success();
@@ -302,7 +320,8 @@ public class RealmAdminResource {
         @APIResponse(responseCode = "404", description = "Not Found")
     })
     public void removeDefaultDefaultClientScope(@PathParam("clientScopeId") String clientScopeId) {
-        auth.clients().requireManageClientScopes();
+        // See addDefaultClientScope - realm-wide configuration requires manage-realm.
+        auth.realm().requireManageRealm();
 
         ClientScopeModel clientScope = realm.getClientScopeById(clientScopeId);
         if (clientScope == null) {
@@ -413,7 +432,13 @@ public class RealmAdminResource {
     })
     public RealmRepresentation getRealm() {
         if (auth.realm().canViewRealm()) {
-            return ModelToRepresentation.toRepresentation(session, realm, false);
+            RealmRepresentation rep = ModelToRepresentation.toRepresentation(session, realm, false);
+            List<String> filteredDefaultGroups = realm.getDefaultGroupsStream()
+                    .filter(auth.groups()::canView)
+                    .map(ModelToRepresentation::buildGroupPath)
+                    .toList();
+            rep.setDefaultGroups(filteredDefaultGroups.isEmpty() ? null : filteredDefaultGroups);
+            return rep;
         } else {
             auth.realm().requireViewRealmNameList();
 
@@ -424,6 +449,7 @@ public class RealmAdminResource {
             rep.setDisplayNameHtml(realm.getDisplayNameHtml());
             rep.setSupportedLocales(realm.getSupportedLocalesStream().collect(Collectors.toSet()));
             rep.setBruteForceProtected(realm.isBruteForceProtected());
+            rep.setOrganizationsEnabled(realm.isOrganizationsEnabled());
 
             if (auth.users().canView()) {
                 rep.setRegistrationEmailAsUsername(realm.isRegistrationEmailAsUsername());
@@ -469,6 +495,13 @@ public class RealmAdminResource {
             ReservedCharValidator.validateLocales(rep.getSupportedLocales());
             ReservedCharValidator.validateSecurityHeaders(rep.getBrowserSecurityHeaders());
         } catch (ReservedCharValidator.ReservedCharException e) {
+            logger.error(e.getMessage(), e);
+            throw ErrorResponse.error(e.getMessage(), Status.BAD_REQUEST);
+        }
+
+        try {
+            SMTPUtil.checkSMTPConfiguration(session, rep.getSmtpServer());
+        } catch (EmailException e) {
             logger.error(e.getMessage(), e);
             throw ErrorResponse.error(e.getMessage(), Status.BAD_REQUEST);
         }
@@ -626,6 +659,11 @@ public class RealmAdminResource {
         return new OrganizationsResource(session, auth, adminEvent);
     }
 
+    @Path("workflows")
+    public WorkflowsResource workflows() {
+        return new WorkflowsResource(session, auth, adminEvent);
+    }
+
     @Path("{extension}")
     public Object extension(@PathParam("extension") String extension) {
         AdminRealmResourceProvider provider = session.getProvider(AdminRealmResourceProvider.class, extension);
@@ -722,11 +760,19 @@ public class RealmAdminResource {
             throw new NotFoundException("Sesssion not found");
         }
 
+        // Resolve the user before the logout removes the session: the resource path only carries the
+        // session id, so listeners (e.g. SSF) would otherwise have no way to tell whose session ended.
+        UserModel sessionUser = userSession.getUser();
+        String userId = sessionUser != null ? sessionUser.getId() : null;
+
         AuthenticationManager.backchannelLogout(session, realm, userSession, session.getContext().getUri(), connection, headers, true);
 
         Map<String, Object> eventRep = new HashMap<>();
         eventRep.put("offline", offline);
-        adminEvent.operation(OperationType.DELETE).resource(ResourceType.USER_SESSION).resourcePath(session.getContext().getUri()).representation(eventRep).success();
+        adminEvent.operation(OperationType.DELETE).resource(ResourceType.USER_SESSION).resourcePath(session.getContext().getUri())
+                .representation(eventRep)
+                .detail(Details.USER_ID, userId)
+                .success();
     }
 
     /**
@@ -757,7 +803,7 @@ public class RealmAdminResource {
             for (Map.Entry<String, Long> entry : activeCount.entrySet()) {
                 Map<String, String> map = new HashMap<>();
                 ClientModel client = realm.getClientById(entry.getKey());
-                if (client == null)
+                if (client == null || !auth.clients().canView(client))
                     continue;
                 map.put("id", client.getId());
                 map.put("clientId", client.getClientId());
@@ -773,7 +819,7 @@ public class RealmAdminResource {
                 if (map == null) {
                     map = new HashMap<>();
                     ClientModel client = realm.getClientById(entry.getKey());
-                    if (client == null)
+                    if (client == null || !auth.clients().canView(client))
                         continue;
                     map.put("id", client.getId());
                     map.put("clientId", client.getClientId());
@@ -880,7 +926,7 @@ public class RealmAdminResource {
                                                  @Parameter(description = "To (inclusive) date (yyyy-MM-dd) or time in Epoch timestamp millis (number of milliseconds since January 1, 1970, 00:00:00 GMT)") @QueryParam("dateTo") String dateTo,
                                                  @Parameter(description = "IP Address") @QueryParam("ipAddress") String ipAddress,
                                                  @Parameter(description = "Paging offset") @QueryParam("first") Integer firstResult,
-                                                 @Parameter(description = "Maximum results size (defaults to 100)") @QueryParam("max") Integer maxResults,
+                                                 @Parameter(description = "Maximum results size") @QueryParam("max") @DefaultValue(Constants.DEFAULT_MAX_RESULTS_STR) Integer maxResults,
                                                  @Parameter(description = "The direction to sort events by (asc or desc)") @QueryParam("direction") String direction) {
         auth.realm().requireViewEvents();
 
@@ -1151,6 +1197,13 @@ public class RealmAdminResource {
                 settings.put("authTokenClientSecret", realm.getSmtpConfig().get("authTokenClientSecret"));
             }
             session.getProvider(EmailTemplateProvider.class).sendSmtpTestEmail(settings, user);
+        } catch (EmailException e) {
+            if ("Email sender provider is disabled or not configured".equals(e.getMessage())) {
+                logger.error(e.getMessage(), e);
+                throw ErrorResponse.error(e.getMessage(), Response.Status.BAD_REQUEST);
+            }
+            logger.errorf(e, "Failed to send email \n %s", e.getCause());
+            throw ErrorResponse.error("Failed to send email", Response.Status.INTERNAL_SERVER_ERROR);
         } catch (Exception e) {
             logger.errorf(e, "Failed to send email \n %s", e.getCause());
             throw ErrorResponse.error("Failed to send email", Response.Status.INTERNAL_SERVER_ERROR);
@@ -1162,11 +1215,19 @@ public class RealmAdminResource {
     private boolean reuseConfiguredAuthenticationForSmtp(Map<String, String> settings, EmailAuthenticator.AuthenticatorType type) {
         // just reuse the configured authentication if the same authenticator, host, port and user are passed
         return Boolean.parseBoolean(settings.get("auth")) && Boolean.parseBoolean(realm.getSmtpConfig().get("auth"))
-                && settings.getOrDefault("authType", EmailAuthenticator.AuthenticatorType.BASIC.name()).equalsIgnoreCase(type.name())
+                && Optional.ofNullable(settings.get("authType")).orElse(EmailAuthenticator.AuthenticatorType.BASIC.name()).equalsIgnoreCase(type.name())
                 && realm.getSmtpConfig().getOrDefault("authType", EmailAuthenticator.AuthenticatorType.BASIC.name()).equalsIgnoreCase(type.name())
-                && Objects.equals(settings.getOrDefault("host", ""), realm.getSmtpConfig().getOrDefault("host", ""))
-                && Objects.equals(settings.getOrDefault("port", "25"), realm.getSmtpConfig().getOrDefault("port", "25"))
-                && Objects.equals(settings.getOrDefault("user", ""), realm.getSmtpConfig().getOrDefault("user", ""));
+                && Objects.equals(Optional.ofNullable(settings.get("host")).orElse(""), realm.getSmtpConfig().getOrDefault("host", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("port")).orElse("25"), realm.getSmtpConfig().getOrDefault("port", "25"))
+                && Objects.equals(Optional.ofNullable(settings.get("user")).orElse(""), realm.getSmtpConfig().getOrDefault("user", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("ssl")).orElse("false"), realm.getSmtpConfig().getOrDefault("ssl", "false"))
+                && Objects.equals(Optional.ofNullable(settings.get("starttls")).orElse("false"), realm.getSmtpConfig().getOrDefault("starttls", "false"))
+                && Objects.equals(Optional.ofNullable(settings.get("from")).orElse(""), realm.getSmtpConfig().getOrDefault("from", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("replyTo")).orElse(""), realm.getSmtpConfig().getOrDefault("replyTo", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("envelopeFrom")).orElse(""), realm.getSmtpConfig().getOrDefault("envelopeFrom", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("authTokenUrl")).orElse(""), realm.getSmtpConfig().getOrDefault("authTokenUrl", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("authTokenClientId")).orElse(""), realm.getSmtpConfig().getOrDefault("authTokenClientId", ""))
+                && Objects.equals(Optional.ofNullable(settings.get("authTokenScope")).orElse(""), realm.getSmtpConfig().getOrDefault("authTokenScope", ""));
     }
 
     @Path("identity-provider")
@@ -1192,7 +1253,9 @@ public class RealmAdminResource {
     public Stream<GroupRepresentation> getDefaultGroups() {
         auth.realm().requireViewRealm();
 
-        return realm.getDefaultGroupsStream().map(ModelToRepresentation::groupToBriefRepresentation);
+        return realm.getDefaultGroupsStream()
+                .filter(auth.groups()::canView)
+                .map(ModelToRepresentation::groupToBriefRepresentation);
     }
 
     @PUT
@@ -1265,6 +1328,7 @@ public class RealmAdminResource {
         }
         auth.groups().requireView(found);
         GroupRepresentation groupRep = ModelToRepresentation.toRepresentation(found, true);
+        GroupUtils.filterRolesInRepresentation(groupRep, realm, session, auth);
         return GroupUtils.populateSubGroupCount(found, groupRep);
     }
 

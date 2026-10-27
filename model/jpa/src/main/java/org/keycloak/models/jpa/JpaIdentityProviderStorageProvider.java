@@ -19,8 +19,10 @@ package org.keycloak.models.jpa;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import jakarta.persistence.EntityManager;
@@ -29,25 +31,35 @@ import jakarta.persistence.TypedQuery;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaDelete;
 import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.MapJoin;
+import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
-import org.hibernate.Session;
-import org.jboss.logging.Logger;
+import jakarta.persistence.criteria.Subquery;
+
 import org.keycloak.broker.provider.IdentityProvider;
 import org.keycloak.broker.provider.IdentityProviderFactory;
+import org.keycloak.broker.provider.util.IdentityProviderTypeUtil;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.IdentityProviderMapperModel;
-import org.keycloak.models.IdentityProviderStorageProvider;
 import org.keycloak.models.IdentityProviderModel;
+import org.keycloak.models.IdentityProviderQuery;
+import org.keycloak.models.IdentityProviderShowInAccountConsole;
+import org.keycloak.models.IdentityProviderStorageProvider;
+import org.keycloak.models.IdentityProviderType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelException;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.jpa.entities.IdentityProviderEntity;
 import org.keycloak.models.jpa.entities.IdentityProviderMapperEntity;
+import org.keycloak.models.jpa.entities.OrganizationIdentityProviderEntity;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.utils.StringUtil;
+
+import org.hibernate.Session;
+import org.jboss.logging.Logger;
 
 import static org.keycloak.models.IdentityProviderModel.ALIAS;
 import static org.keycloak.models.IdentityProviderModel.ALIAS_NOT_IN;
@@ -61,6 +73,7 @@ import static org.keycloak.models.IdentityProviderModel.ORGANIZATION_ID;
 import static org.keycloak.models.IdentityProviderModel.ORGANIZATION_ID_NOT_NULL;
 import static org.keycloak.models.IdentityProviderModel.POST_BROKER_LOGIN_FLOW_ID;
 import static org.keycloak.models.IdentityProviderModel.SEARCH;
+import static org.keycloak.models.IdentityProviderModel.SHOW_IN_ACCOUNT_CONSOLE;
 import static org.keycloak.models.jpa.PaginationUtils.paginateQuery;
 import static org.keycloak.utils.StreamsUtil.closing;
 
@@ -101,7 +114,6 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
         entity.setAuthenticateByDefault(identityProvider.isAuthenticateByDefault());
         entity.setFirstBrokerLoginFlowId(identityProvider.getFirstBrokerLoginFlowId());
         entity.setPostBrokerLoginFlowId(identityProvider.getPostBrokerLoginFlowId());
-        entity.setOrganizationId(identityProvider.getOrganizationId());
         entity.setConfig(identityProvider.getConfig());
         entity.setLinkOnly(identityProvider.isLinkOnly());
         entity.setHideOnLogin(identityProvider.isHideOnLogin());
@@ -124,7 +136,6 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
         entity.setAuthenticateByDefault(identityProvider.isAuthenticateByDefault());
         entity.setFirstBrokerLoginFlowId(identityProvider.getFirstBrokerLoginFlowId());
         entity.setPostBrokerLoginFlowId(identityProvider.getPostBrokerLoginFlowId());
-        entity.setOrganizationId(identityProvider.getOrganizationId());
         entity.setAddReadTokenRoleOnCreate(identityProvider.isAddReadTokenRoleOnCreate());
         entity.setStoreToken(identityProvider.isStoreToken());
         entity.setConfig(identityProvider.getConfig());
@@ -165,6 +176,9 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
             //when accessing the config of the entity (entity.getConfig()) withing the toModel(entity)
             IdentityProviderModel model = toModel(entity);
 
+            em.createNamedQuery("clearDomainIdpRouting")
+                    .setParameter("idpId", entity.getInternalId())
+                    .executeUpdate();
             em.remove(entity);
             // flush so that constraint violations are flagged and converted into model exception now rather than at the end of the tx.
             em.flush();
@@ -215,16 +229,27 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
     }
 
     @Override
-    public Stream<IdentityProviderModel> getAllStream(Map<String, String> attrs, Integer first, Integer max) {
+    public Stream<IdentityProviderModel> getAllStream(IdentityProviderQuery query, Integer first, Integer max) {
         CriteriaBuilder builder = em.getCriteriaBuilder();
-        CriteriaQuery<IdentityProviderEntity> query = builder.createQuery(IdentityProviderEntity.class);
-        Root<IdentityProviderEntity> idp = query.from(IdentityProviderEntity.class);
+        CriteriaQuery<IdentityProviderEntity> cq = builder.createQuery(IdentityProviderEntity.class);
+        Root<IdentityProviderEntity> idp = cq.from(IdentityProviderEntity.class);
 
         List<Predicate> predicates = new ArrayList<>();
         predicates.add(builder.equal(idp.get("realmId"), getRealm().getId()));
 
-        if (attrs != null) {
-            for (Map.Entry<String, String> entry : attrs.entrySet()) {
+        List<String> includedProviderFactories = null;
+        if (query.getType() != null && query.getType() != IdentityProviderType.ANY) {
+            includedProviderFactories = IdentityProviderTypeUtil.listFactoriesByType(session, query.getType());
+        } else if (query.getCapability() != null) {
+            includedProviderFactories = IdentityProviderTypeUtil.listFactoriesByCapability(session, query.getCapability());
+        }
+
+        if (includedProviderFactories != null) {
+            predicates.add(builder.in(idp.get("providerId")).value(includedProviderFactories));
+        }
+
+        if (query.getOptions() != null) {
+            for (Map.Entry<String, String> entry : query.getOptions().entrySet()) {
                 String key = entry.getKey();
                 String value = entry.getValue();
                 if (StringUtil.isBlank(key)) {
@@ -235,17 +260,17 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
                     case ENABLED:
                     case HIDE_ON_LOGIN:
                     case LINK_ONLY: {
+                        Path<Boolean> path = idp.get(key);
                         if (Boolean.parseBoolean(value)) {
-                            predicates.add(builder.isTrue(idp.get(key)));
+                            predicates.add(builder.isTrue(path));
                         } else {
-                            predicates.add(builder.isFalse(idp.get(key)));
+                            predicates.add(builder.or(builder.isNull(path), builder.equal(path, Boolean.FALSE)));
                         }
                         break;
                     }
                     case ALIAS:
                     case FIRST_BROKER_LOGIN_FLOW_ID:
-                    case POST_BROKER_LOGIN_FLOW_ID:
-                    case ORGANIZATION_ID: {
+                    case POST_BROKER_LOGIN_FLOW_ID: {
                         if (StringUtil.isBlank(value)) {
                             predicates.add(builder.isNull(idp.get(key)));
                         } else {
@@ -253,8 +278,28 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
                         }
                         break;
                     }
+                    case ORGANIZATION_ID: {
+                        Subquery<String> orgSub = cq.subquery(String.class);
+                        Root<OrganizationIdentityProviderEntity> orgIdpRoot = orgSub.from(OrganizationIdentityProviderEntity.class);
+                        orgSub.select(orgIdpRoot.get("identityProviderId"));
+                        if (StringUtil.isBlank(value)) {
+                            orgSub.where(builder.equal(orgIdpRoot.get("identityProviderId"), idp.get("internalId")));
+                            predicates.add(builder.not(builder.exists(orgSub)));
+                        } else {
+                            orgSub.where(
+                                    builder.equal(orgIdpRoot.get("identityProviderId"), idp.get("internalId")),
+                                    builder.equal(orgIdpRoot.get("organization").get("id"), value)
+                            );
+                            predicates.add(builder.exists(orgSub));
+                        }
+                        break;
+                    }
                     case ORGANIZATION_ID_NOT_NULL: {
-                        predicates.add(builder.isNotNull(idp.get(ORGANIZATION_ID)));
+                        Subquery<String> orgExistsSub = cq.subquery(String.class);
+                        Root<OrganizationIdentityProviderEntity> orgExistsRoot = orgExistsSub.from(OrganizationIdentityProviderEntity.class);
+                        orgExistsSub.select(orgExistsRoot.get("identityProviderId"));
+                        orgExistsSub.where(builder.equal(orgExistsRoot.get("identityProviderId"), idp.get("internalId")));
+                        predicates.add(builder.exists(orgExistsSub));
                         break;
                     }
                     case SEARCH: {
@@ -271,30 +316,47 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
                         break;
                     }
                     default: {
-                        String dbProductName = em.unwrap(Session.class).doReturningWork(connection -> connection.getMetaData().getDatabaseProductName());
-                        MapJoin<IdentityProviderEntity, String, String> configJoin = idp.joinMap("config");
-                        Predicate configNamePredicate = builder.equal(configJoin.key(), key);
+						boolean orNull = switch (key) {
+							case SHOW_IN_ACCOUNT_CONSOLE -> IdentityProviderShowInAccountConsole.ALWAYS.name().equals(value);
+							default -> false;
+						};
+						List<Predicate> orPredicates = new ArrayList<>();
+						orPredicates.add(createConfigPredicate(builder, idp, key, value));
+						if (orNull) {
+							orPredicates.add(createConfigPredicate(builder, idp, key, null));
+						}
 
-                        if (dbProductName.equals("Oracle")) {
-                            // SELECT * FROM identity_provider_config WHERE ... DBMS_LOB.COMPARE(value, '0') = 0 ...;
-                            // Oracle is not able to compare a CLOB with a VARCHAR unless it being converted with TO_CHAR
-                            // But for this all values in the table need to be smaller than 4K, otherwise the cast will fail with
-                            // "ORA-22835: Buffer too small for CLOB to CHAR" (even if it is in another row).
-                            // This leaves DBMS_LOB.COMPARE as the option to compare the CLOB with the value.
-                            Predicate configValuePredicate = builder.equal(builder.function("DBMS_LOB.COMPARE", Integer.class, configJoin.value(), builder.literal(value)), 0);
-                            predicates.add(builder.and(configNamePredicate, configValuePredicate));
-                        } else {
-                            predicates.add(builder.and(configNamePredicate, builder.equal(configJoin.value(), value)));
-                        }
+						predicates.add(builder.or(orPredicates.toArray(Predicate[]::new)));
                     }
                 }
             }
         }
 
-        query.orderBy(builder.asc(idp.get(ALIAS)));
-        TypedQuery<IdentityProviderEntity> typedQuery = em.createQuery(query.select(idp).where(predicates.toArray(Predicate[]::new)));
+        cq.orderBy(builder.asc(idp.get(ALIAS)));
+        TypedQuery<IdentityProviderEntity> typedQuery = em.createQuery(cq.select(idp).where(predicates.toArray(Predicate[]::new)));
         return closing(paginateQuery(typedQuery, first, max).getResultStream()).map(this::toModel);
     }
+
+	private Predicate createConfigPredicate(CriteriaBuilder builder, Root<IdentityProviderEntity> idp, String key, String value) {
+		String dbProductName = em.unwrap(Session.class).doReturningWork(connection -> connection.getMetaData().getDatabaseProductName());
+		MapJoin<IdentityProviderEntity, String, String> configJoin = idp.joinMap("config", JoinType.LEFT);
+		configJoin.on(builder.equal(configJoin.key(), key));
+
+		if (value == null)  {
+			return builder.isNull(configJoin.value());
+		}
+
+		if (dbProductName.equals("Oracle")) {
+			// SELECT * FROM identity_provider_config WHERE ... DBMS_LOB.COMPARE(value, '0') = 0 ...;
+			// Oracle is not able to compare a CLOB with a VARCHAR unless it being converted with TO_CHAR
+			// But for this all values in the table need to be smaller than 4K, otherwise the cast will fail with
+			// "ORA-22835: Buffer too small for CLOB to CHAR" (even if it is in another row).
+			// This leaves DBMS_LOB.COMPARE as the option to compare the CLOB with the value.
+			return builder.equal(builder.function("DBMS_LOB.COMPARE", Integer.class, configJoin.value(), builder.literal(value)), 0);
+		} else {
+			return builder.equal(configJoin.value(), value);
+		}
+	}
 
     @Override
     public Stream<String> getByFlow(String flowId, String search, Integer first, Integer max) {
@@ -541,7 +603,7 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
         identityProviderModel.setAuthenticateByDefault(entity.isAuthenticateByDefault());
         identityProviderModel.setFirstBrokerLoginFlowId(entity.getFirstBrokerLoginFlowId());
         identityProviderModel.setPostBrokerLoginFlowId(entity.getPostBrokerLoginFlowId());
-        identityProviderModel.setOrganizationId(entity.getOrganizationId());
+        identityProviderModel.setOrganizationIds(getOrganizationIdsForIdp(entity.getInternalId()));
         identityProviderModel.setStoreToken(entity.isStoreToken());
         identityProviderModel.setAddReadTokenRoleOnCreate(entity.isAddReadTokenRoleOnCreate());
 
@@ -561,6 +623,12 @@ public class JpaIdentityProviderStorageProvider implements IdentityProviderStora
             logger.warn("Couldn't find a suitable identity provider factory for " + providerId);
             return new IdentityProviderModel();
         }
+    }
+
+    private Set<String> getOrganizationIdsForIdp(String idpInternalId) {
+        return new LinkedHashSet<>(em.createNamedQuery("getOrganizationIdsByIdp", String.class)
+                .setParameter("idpId", idpInternalId)
+                .getResultList());
     }
 
     private void checkUniqueMapperNamePerIdentityProvider(IdentityProviderMapperModel model) {

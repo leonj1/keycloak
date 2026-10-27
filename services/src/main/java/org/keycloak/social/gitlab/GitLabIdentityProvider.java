@@ -17,7 +17,11 @@
 
 package org.keycloak.social.gitlab;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import java.io.IOException;
+
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.OAuth2Constants;
 import org.keycloak.OAuthErrorException;
 import org.keycloak.broker.oidc.OIDCIdentityProvider;
@@ -25,20 +29,20 @@ import org.keycloak.broker.oidc.OIDCIdentityProviderConfig;
 import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
-import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.broker.social.SocialIdentityProvider;
+import org.keycloak.common.util.Time;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
+import org.keycloak.http.simple.SimpleHttp;
+import org.keycloak.http.simple.SimpleHttpResponse;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.representations.AccessTokenResponse;
 import org.keycloak.representations.IDToken;
 import org.keycloak.representations.JsonWebToken;
 import org.keycloak.services.ErrorResponseException;
 
-import jakarta.ws.rs.core.MultivaluedMap;
-import jakarta.ws.rs.core.Response;
-import java.io.IOException;
+import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -90,7 +94,7 @@ public class GitLabIdentityProvider extends OIDCIdentityProvider  implements Soc
 
 
 	@Override
-	protected BrokeredIdentityContext exchangeExternalTokenV1Impl(EventBuilder event, MultivaluedMap<String, String> params) {
+	protected BrokeredIdentityContext exchangeExternalImpl(EventBuilder event, MultivaluedMap<String, String> params) {
 		return exchangeExternalUserInfoValidationOnly(event, params);
 	}
 
@@ -134,36 +138,29 @@ public class GitLabIdentityProvider extends OIDCIdentityProvider  implements Soc
 
 
 	protected BrokeredIdentityContext extractIdentity(AccessTokenResponse tokenResponse, String accessToken, JsonWebToken idToken) throws IOException {
-
-		SimpleHttp.Response response = null;
-		int status = 0;
+		JsonNode profile = null;
+		int lastStatus = 0;
 
 		for (int i = 0; i < 10; i++) {
-			try {
-				String userInfoUrl = getUserInfoUrl();
-				response = SimpleHttp.doGet(userInfoUrl, session)
-						.header("Authorization", "Bearer " + accessToken).asResponse();
-				status = response.getStatus();
+			try (SimpleHttpResponse response = SimpleHttp.create(session).doGet(getUserInfoUrl())
+					.header("Authorization", "Bearer " + accessToken).asResponse()) {
+				lastStatus = response.getStatus();
+				if (lastStatus == 200) {
+					profile = response.asJson();
+					break;
+				}
 			} catch (IOException e) {
 				logger.debug("Failed to invoke user info for external exchange", e);
 			}
-			if (status == 200) break;
-			response.close();
 			try {
 				Thread.sleep(200);
 			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
 				throw new RuntimeException(e);
 			}
 		}
-		if (status != 200) {
-			logger.debug("Failed to invoke user info status: " + status);
-			throw new IdentityBrokerException("Gitlab user info call failure");
-		}
-		JsonNode profile = null;
-		try {
-			profile = response.asJson();
-		} catch (IOException e) {
-			throw new IdentityBrokerException("Gitlab user info call failure");
+		if (profile == null) {
+			throw new IdentityBrokerException("Gitlab user info call failure (last status: " + lastStatus + ")");
 		}
 		String id = getJsonProperty(profile, "id");
 		if (id == null) {
@@ -172,6 +169,13 @@ public class GitLabIdentityProvider extends OIDCIdentityProvider  implements Soc
 		BrokeredIdentityContext identity = gitlabExtractFromProfile(profile);
 		identity.getContextData().put(FEDERATED_ACCESS_TOKEN_RESPONSE, tokenResponse);
 		identity.getContextData().put(VALIDATED_ID_TOKEN, idToken);
+		identity.getContextData().put(FEDERATED_ACCESS_TOKEN, accessToken);
+		long accessTokenExpiration = tokenResponse.getExpiresIn() > 0
+				? Time.currentTime() + tokenResponse.getExpiresIn() : 0L;
+		identity.getContextData().put(FEDERATED_TOKEN_EXPIRATION, accessTokenExpiration);
+		if (tokenResponse.getRefreshToken() != null) {
+			identity.getContextData().put(FEDERATED_REFRESH_TOKEN, tokenResponse.getRefreshToken());
+		}
 		processAccessTokenResponse(identity, tokenResponse);
 
 		return identity;

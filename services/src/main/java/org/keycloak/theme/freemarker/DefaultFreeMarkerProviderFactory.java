@@ -1,17 +1,18 @@
 package org.keycloak.theme.freemarker;
 
-import freemarker.template.Template;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.keycloak.Config;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.theme.KeycloakSanitizerMethod;
 
-import java.util.concurrent.ConcurrentHashMap;
+import freemarker.template.Template;
 
 public class DefaultFreeMarkerProviderFactory implements FreeMarkerProviderFactory {
 
-    private DefaultFreeMarkerProvider provider;
-    private ConcurrentHashMap<String, Template> cache;
+    private volatile DefaultFreeMarkerProvider provider;
+    private volatile ConcurrentHashMap<String, Template> cache;
     private KeycloakSanitizerMethod kcSanitizeMethod;
 
     @Override
@@ -45,6 +46,15 @@ public class DefaultFreeMarkerProviderFactory implements FreeMarkerProviderFacto
     @Override
     public String getId() {
         return "default";
+    }
+
+    @Override
+    public synchronized void clearCache() {
+        if (cache != null) {
+            ConcurrentHashMap<String, Template> newCache = new ConcurrentHashMap<>();
+            cache = newCache;
+            provider = new DefaultFreeMarkerProvider(newCache, kcSanitizeMethod);
+        }
     }
 
 }

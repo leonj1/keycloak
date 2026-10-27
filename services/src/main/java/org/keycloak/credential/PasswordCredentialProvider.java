@@ -16,10 +16,12 @@
  */
 package org.keycloak.credential;
 
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Meter;
-import io.micrometer.core.instrument.Tag;
-import org.jboss.logging.Logger;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import org.keycloak.common.util.Time;
 import org.keycloak.credential.hash.PasswordHashProvider;
 import org.keycloak.models.AbstractKeycloakTransaction;
@@ -34,11 +36,10 @@ import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.policy.PasswordPolicyManagerProvider;
 import org.keycloak.policy.PolicyError;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.Tag;
+import org.jboss.logging.Logger;
 
 import static org.keycloak.credential.PasswordCredentialProviderFactory.METER_ALGORITHM_TAG;
 import static org.keycloak.credential.PasswordCredentialProviderFactory.METER_HASHING_STRENGTH_TAG;
@@ -83,7 +84,11 @@ public class PasswordCredentialProvider implements CredentialProvider<PasswordCr
         return PasswordCredentialModel.createFromCredentialModel(passwords.get(0));
     }
 
-    public boolean createCredential(RealmModel realm, UserModel user, String password) {
+    public CredentialModel createCredential(RealmModel realm, UserModel user, String password) {
+        return createCredentialAndGet(realm, user, password).storedCredential();
+    }
+
+    private CredentialUpdate createCredentialAndGet(RealmModel realm, UserModel user, String password) {
         PasswordPolicy policy = realm.getPasswordPolicy();
 
         PolicyError error = session.getProvider(PasswordPolicyManagerProvider.class).validate(realm, user, password);
@@ -91,16 +96,16 @@ public class PasswordCredentialProvider implements CredentialProvider<PasswordCr
 
         PasswordHashProvider hash = getHashProvider(policy);
         if (hash == null) {
-            return false;
+            return CredentialUpdate.NOT_HANDLED;
         }
         try {
             PasswordCredentialModel credentialModel = hash.encodedCredential(password, policy.getHashIterations());
             credentialModel.setCreatedDate(Time.currentTimeMillis());
-            createCredential(realm, user, credentialModel);
+            CredentialModel storedCredential = createCredential(realm, user, credentialModel);
+            return new CredentialUpdate(true, storedCredential);
         } catch (Throwable t) {
             throw new ModelException(t.getMessage(), t);
         }
-        return true;
     }
 
     @Override
@@ -127,6 +132,8 @@ public class PasswordCredentialProvider implements CredentialProvider<PasswordCr
             if (expiredPasswordsPolicyValue > 1 || passwordAgeInDaysPolicy > 0) {
                 oldPassword.setId(null);
                 oldPassword.setType(PasswordCredentialModel.PASSWORD_HISTORY);
+                // Setting the label to "nulL" avoids duplicate label errors
+                oldPassword.setUserLabel(null);
                 oldPassword = user.credentialManager().createStoredCredential(oldPassword);
             }
         }
@@ -184,7 +191,12 @@ public class PasswordCredentialProvider implements CredentialProvider<PasswordCr
 
     @Override
     public boolean updateCredential(RealmModel realm, UserModel user, CredentialInput input) {
-        return createCredential(realm, user, input.getChallengeResponse());
+        return updateCredentialAndGet(realm, user, input).handled();
+    }
+
+    @Override
+    public CredentialUpdate updateCredentialAndGet(RealmModel realm, UserModel user, CredentialInput input) {
+        return createCredentialAndGet(realm, user, input.getChallengeResponse());
     }
 
     @Override

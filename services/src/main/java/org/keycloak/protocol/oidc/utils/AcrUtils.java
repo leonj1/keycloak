@@ -17,7 +17,6 @@
 
 package org.keycloak.protocol.oidc.utils;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,8 +26,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.stream.Collectors;
 
-import org.jboss.logging.Logger;
 import org.keycloak.authentication.authenticators.util.LoAUtil;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.Constants;
@@ -37,6 +37,9 @@ import org.keycloak.protocol.oidc.OIDCAdvancedConfigWrapper;
 import org.keycloak.representations.ClaimsRepresentation;
 import org.keycloak.representations.IDToken;
 import org.keycloak.util.JsonSerialization;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import org.jboss.logging.Logger;
 
 public class AcrUtils {
 
@@ -55,6 +58,22 @@ public class AcrUtils {
             acrValues = getDefaultAcrValues(client);
         }
         return enforceMinimumAcr(acrValues, client);
+    }
+
+    /**
+     * Maps ACR values to LoA and returns the lowest. Unmapped or non-numeric ACRs fall back to {@link Constants#MINIMUM_LOA}.
+     */
+    public static OptionalInt getLowestLoaForAcrValues(List<String> acrValues, ClientModel client) {
+        Map<String, Integer> acrLoaMap = getAcrLoaMap(client);
+        return acrValues.stream().mapToInt(acr -> {
+            Integer loa = acrLoaMap.get(acr);
+            try {
+                return loa == null ? Integer.parseInt(acr) : loa;
+            } catch (NumberFormatException e) {
+                LOGGER.warnf("Requested acr value '%s' is not a number and it is not mapped in the ACR-To-Loa mappings of realm or client. Please doublecheck ACR-to-LOA mapping or correct used ACR.", acr);
+                return Constants.MINIMUM_LOA;
+            }
+        }).min();
     }
 
     public static List<String> enforceMinimumAcr(List<String> acrValues, ClientModel client) {
@@ -146,6 +165,20 @@ public class AcrUtils {
         }
     }
 
+    public static Map<String, Integer> getUriLoaMap(ClientModel client) {
+        Map<String, Integer> result = getAcrLoaMapForClientOnly(client);
+        if (!result.isEmpty()) {
+            // client has always the correct maps uri or acr
+            return result;
+        }
+
+        // Fallback to realm but using the two maps acr => uri => loa
+        Map<String, Integer> acrLoaMap = getAcrLoaMap(client.getRealm());
+        Map<String, String> acrUriMap = getAcrUriMap(client.getRealm());
+        return acrLoaMap.entrySet().stream()
+                .filter(e -> acrUriMap.containsKey(e.getKey()))
+                .collect(Collectors.toMap(e -> acrUriMap.get(e.getKey()), Map.Entry::getValue, (a, b) -> Math.max(a, b)));
+    }
 
     private static Map<String, Integer> getAcrLoaMapForClientOnly(ClientModel client) {
         String map = client.getAttribute(Constants.ACR_LOA_MAP);
@@ -153,11 +186,19 @@ public class AcrUtils {
             return Collections.emptyMap();
         }
         try {
-            return JsonSerialization.readValue(map, new TypeReference<Map<String, Integer>>() {});
+            return parseAcrLoaMap(map);
         } catch (IOException e) {
             LOGGER.warnf("Invalid client configuration (ACR-LOA map) for client '%s'. Error details: %s", client.getClientId(), e.getMessage());
             return Collections.emptyMap();
         }
+    }
+
+    public static Map<String, Integer> parseAcrLoaMap(String map) throws IOException {
+        return JsonSerialization.readValue(map, new TypeReference<Map<String, Integer>>() {});
+    }
+
+    public static Map<String, String> parseAcrUriMap(String map) throws IOException {
+        return JsonSerialization.readValue(map, new TypeReference<Map<String, String>>() {});
     }
 
     /**
@@ -170,9 +211,27 @@ public class AcrUtils {
             return Collections.emptyMap();
         }
         try {
-            return JsonSerialization.readValue(map, new TypeReference<Map<String, Integer>>() {});
+            return parseAcrLoaMap(map);
         } catch (IOException e) {
             LOGGER.warnf("Invalid realm configuration (ACR-LOA map). Details: %s", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Return the acr to uri map in the realm.
+     * @param realm
+     * @return Map corresponding to acr to uri map
+     */
+    public static Map<String, String> getAcrUriMap(RealmModel realm) {
+        String map = realm.getAttribute(Constants.ACR_URI_MAP);
+        if (map == null || map.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        try {
+            return parseAcrUriMap(map);
+        } catch (IOException e) {
+            LOGGER.warnf("Invalid realm configuration (ACR-URI map). Details: %s", e.getMessage());
             return Collections.emptyMap();
         }
     }

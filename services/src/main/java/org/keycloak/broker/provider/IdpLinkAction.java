@@ -23,7 +23,7 @@ import java.io.IOException;
 import java.util.Collections;
 
 import jakarta.ws.rs.core.Response;
-import org.jboss.logging.Logger;
+
 import org.keycloak.Config;
 import org.keycloak.authentication.InitiatedActionSupport;
 import org.keycloak.authentication.RequiredActionContext;
@@ -45,11 +45,12 @@ import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.utils.FormMessage;
 import org.keycloak.models.utils.KeycloakModelUtils;
-import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.managers.ClientSessionCode;
 import org.keycloak.services.resources.IdentityBrokerService;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.util.JsonSerialization;
+
+import org.jboss.logging.Logger;
 
 import static org.keycloak.services.resources.IdentityBrokerService.LINKING_IDENTITY_PROVIDER;
 
@@ -213,7 +214,6 @@ public class IdpLinkAction implements RequiredActionProvider, RequiredActionFact
                 .setUser(context.getUser())
                 .setErrors(Collections.singletonList(formMessage))
                 .createErrorPage(Response.Status.BAD_REQUEST);
-        context.getEvent().error(formMessage.getMessage());
         context.challenge(response);
     }
 

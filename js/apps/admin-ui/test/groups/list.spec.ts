@@ -1,14 +1,15 @@
 import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { login } from "../utils/login";
+import { createTestBed, type TestBed } from "../support/testbed.ts";
+import adminClient from "../utils/AdminClient.ts";
+import { login } from "../utils/login.ts";
 import {
   assertAxeViolations,
   assertNotificationMessage,
   selectActionToggleItem,
-} from "../utils/masthead";
-import { cancelModal, confirmModal } from "../utils/modal";
-import { goToGroups } from "../utils/sidebar";
+} from "../utils/masthead.ts";
+import { cancelModal, confirmModal } from "../utils/modal.ts";
+import { goToGroups, goToRealm } from "../utils/sidebar.ts";
 import {
   assertNoResults,
   assertRowExists,
@@ -17,34 +18,25 @@ import {
   clickTableRowItem,
   clickTableToolbarItem,
   searchItem,
-} from "../utils/table";
-import { createGroup, editGroup, searchGroup } from "./list";
-import { goToGroupDetails } from "./util";
+} from "../utils/table.ts";
+import { createGroup, editGroup, searchGroup } from "./list.ts";
+import { goToGroupDetails } from "./util.ts";
 
-test.describe("Group test", () => {
+test.describe.serial("Group test", () => {
   const groupName = `group-${uuid()}`;
-  const users: { id: string; username: string }[] = [];
-  const username = "test-user";
+  let testBed: TestBed | undefined;
 
   test.beforeAll(async () => {
-    for (let i = 0; i < 5; i++) {
-      const user = await adminClient.createUser({
-        username: username + i,
-        enabled: true,
-      });
-      users.push({ id: user.id!, username: username + i });
-    }
+    testBed = await createTestBed();
   });
 
   test.afterAll(async () => {
-    await adminClient.deleteGroups();
-    for (let i = 0; i < 5; i++) {
-      await adminClient.deleteUser(username + i);
-    }
+    await testBed?.[Symbol.asyncDispose]();
   });
 
   test.beforeEach(async ({ page }) => {
     await login(page);
+    await goToRealm(page, testBed!.realm);
     await goToGroups(page);
   });
 
@@ -64,7 +56,7 @@ test.describe("Group test", () => {
 
     await searchGroup(page, secondGroupName);
     await assertRowExists(page, secondGroupName, true);
-    await adminClient.deleteGroups();
+    await adminClient.deleteGroups(testBed!.realm);
   });
 
   test("Fail to create group with empty name", async ({ page }) => {
@@ -86,21 +78,36 @@ test.describe("Group test", () => {
   });
 });
 
-test.describe("Search group under current group", () => {
-  const predefinedGroups = ["level", "level1", "level2", "level3"];
+test.describe.serial("Search group under current group", () => {
+  const groupSuffix = uuid();
+  const predefinedGroups = ["level", "level1", "level2", "level3"].map(
+    (group) => `${group}-${groupSuffix}`,
+  );
+  let testBed: TestBed | undefined;
 
   const placeholder = "Filter groups";
   const tableName = "Groups";
 
+  test.beforeAll(async () => {
+    testBed = await createTestBed();
+  });
+
   test.beforeEach(async ({ page }) => {
     for (const group of predefinedGroups) {
-      await adminClient.createGroup(group);
+      await adminClient.createGroup(group, testBed!.realm);
     }
     await login(page);
+    await goToRealm(page, testBed!.realm);
     await goToGroups(page);
   });
 
-  test.afterEach(() => adminClient.deleteGroups());
+  test.afterEach(async () => {
+    await adminClient.deleteGroups(testBed!.realm);
+  });
+
+  test.afterAll(async () => {
+    await testBed?.[Symbol.asyncDispose]();
+  });
 
   test("Search group that exists", async ({ page }) => {
     await searchItem(page, placeholder, predefinedGroups[1]);
@@ -135,7 +142,7 @@ test.describe("Search group under current group", () => {
   });
 
   test("Edit group", async ({ page }) => {
-    const newGroupName = "new_group_name";
+    const newGroupName = `new-group-name-${groupSuffix}`;
     const description = "new description";
     await clickRowKebabItem(page, predefinedGroups[3], "Edit");
     await editGroup(page, newGroupName, description);

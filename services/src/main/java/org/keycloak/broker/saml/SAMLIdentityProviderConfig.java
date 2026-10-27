@@ -16,8 +16,7 @@
  */
 package org.keycloak.broker.saml;
 
-import static org.keycloak.common.util.UriUtils.checkUrl;
-
+import org.keycloak.common.Profile;
 import org.keycloak.common.enums.SslRequired;
 import org.keycloak.dom.saml.v2.protocol.AuthnContextComparisonType;
 import org.keycloak.models.IdentityProviderModel;
@@ -26,6 +25,8 @@ import org.keycloak.protocol.saml.SamlPrincipalType;
 import org.keycloak.saml.common.constants.JBossSAMLURIConstants;
 import org.keycloak.saml.common.util.XmlKeyInfoKeyNameTransformer;
 import org.keycloak.utils.StringUtil;
+
+import static org.keycloak.common.util.UriUtils.checkUrl;
 
 /**
  * @author Pedro Igor
@@ -67,6 +68,9 @@ public class SAMLIdentityProviderConfig extends IdentityProviderModel {
     public static final String ATTRIBUTE_CONSUMING_SERVICE_INDEX = "attributeConsumingServiceIndex";
     public static final String ATTRIBUTE_CONSUMING_SERVICE_NAME = "attributeConsumingServiceName";
     public static final String USE_METADATA_DESCRIPTOR_URL = "useMetadataDescriptorUrl";
+    public static final String DESCRIPTOR_CACHE_SECONDS = "descriptorCacheSeconds";
+    public static final String ONE_TIME_USE_MAX_AGE_SECONDS = "oneTimeUseMaxAgeSeconds";
+    public static final long DEFAULT_ONE_TIME_USE_MAX_AGE_SECONDS = 60 * 60;
 
     public SAMLIdentityProviderConfig() {
     }
@@ -251,7 +255,7 @@ public class SAMLIdentityProviderConfig extends IdentityProviderModel {
     public boolean isPostBindingLogout() {
         String postBindingLogout = getConfig().get(POST_BINDING_LOGOUT);
         if (postBindingLogout == null) {
-            // To maintain unchanged behavior when adding this field, we set the inital value to equal that
+            // To maintain unchanged behavior when adding this field, we set the initial value to equal that
             // of the binding for the response:
             return isPostBindingResponse();
         }
@@ -428,6 +432,29 @@ public class SAMLIdentityProviderConfig extends IdentityProviderModel {
         return Boolean.parseBoolean(getConfig().get(USE_METADATA_DESCRIPTOR_URL));
     }
 
+    public Long getDescriptorCacheSeconds() {
+        String descriptorCacheSeconds = getConfig().get(DESCRIPTOR_CACHE_SECONDS);
+        if (descriptorCacheSeconds != null && !descriptorCacheSeconds.isEmpty()) {
+            try {
+                Long descriptorCacheSecondsLong = Long.valueOf(descriptorCacheSeconds);
+                if (descriptorCacheSecondsLong > 0) {
+                    return descriptorCacheSecondsLong;
+                }
+            } catch (NumberFormatException e) {
+                // ignore it and use null
+            }
+        }
+        return null;
+    }
+
+    public void setDescriptorCacheSeconds(Long descriptorCacheSeconds) {
+        if (descriptorCacheSeconds == null || descriptorCacheSeconds <= 0) {
+            getConfig().remove(DESCRIPTOR_CACHE_SECONDS);
+        } else {
+            getConfig().put(DESCRIPTOR_CACHE_SECONDS, String.valueOf(descriptorCacheSeconds));
+        }
+    }
+
     @Override
     public void validate(RealmModel realm) {
         SslRequired sslRequired = realm.getSslRequired();
@@ -449,5 +476,35 @@ public class SAMLIdentityProviderConfig extends IdentityProviderModel {
         if (JBossSAMLURIConstants.NAMEID_FORMAT_TRANSIENT.get().equals(getNameIDPolicyFormat()) && SamlPrincipalType.SUBJECT == getPrincipalType())
             throw new IllegalArgumentException("Can not have Transient NameID Policy Format together with SUBJECT Principal Type");
 
+    }
+
+    public long getOneTimeUseMaxAgeSeconds() {
+        String value = getConfig().get(ONE_TIME_USE_MAX_AGE_SECONDS);
+        if (value != null && !value.isEmpty()) {
+            try {
+                long result = Long.parseLong(value);
+                if (result > 0) {
+                    return result;
+                }
+            } catch (NumberFormatException e) {
+                // ignore and use default
+            }
+        }
+        return DEFAULT_ONE_TIME_USE_MAX_AGE_SECONDS;
+    }
+
+    public void setOneTimeUseMaxAgeSeconds(long oneTimeUseMaxAgeSeconds) {
+        if (oneTimeUseMaxAgeSeconds <= 0) {
+            getConfig().remove(ONE_TIME_USE_MAX_AGE_SECONDS);
+        } else {
+            getConfig().put(ONE_TIME_USE_MAX_AGE_SECONDS, String.valueOf(oneTimeUseMaxAgeSeconds));
+        }
+    }
+
+    @Override
+    public boolean isStoreTokenInSession() {
+        // for saml is false by default
+        return Profile.isFeatureEnabled(Profile.Feature.IDENTITY_BROKERING_API_V2)
+                & Boolean.parseBoolean(getConfig().get(STORE_TOKEN_IN_SESSION));
     }
 }

@@ -1,84 +1,231 @@
 import { expect, test } from "@playwright/test";
-import { login } from "./login";
-import { getAccountUrl, getAdminUrl, getRootPath } from "./utils";
+import { login } from "./support/actions.ts";
+import { createTestBed } from "./support/testbed.ts";
 
-test.describe("Applications test", () => {
-  test.beforeEach(async ({ page }) => {
-    // Sign out all devices before each test
-    await login(page);
-    await page.getByTestId("accountSecurity").click();
-    await page.getByTestId("account-security/device-activity").click();
+test.describe("Applications", () => {
+  test("shows a list of applications the user has access to", async ({
+    page,
+  }) => {
+    await using testBed = await createTestBed();
 
-    await page
-      .getByRole("button", { name: "Sign out all devices", exact: true })
-      .click();
-    await page.getByRole("button", { name: "Confirm" }).click();
-
-    await expect(
-      page.getByRole("heading", { name: "Sign in to your account" }),
-    ).toBeVisible();
-  });
-
-  test("Single application", async ({ page }) => {
-    await login(page);
-
+    // Log in and navigate to the applications page.
+    await login(page, testBed.realm);
     await page.getByTestId("applications").click();
 
+    // Assert that the applications list is displayed and contains the expected application.
     await expect(page.getByTestId("applications-list-item")).toHaveCount(1);
     await expect(page.getByTestId("applications-list-item")).toContainText(
       "Account Console",
     );
   });
 
-  test("Single application twice", async ({ browser }) => {
-    const context1 = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
+  test("opens application links without granting window.opener access", async ({
+    page,
+  }) => {
+    await using testBed = await createTestBed();
+
+    const effectiveUrl = "https://example.com/app";
+    await page.route("**/applications", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            clientId: "external-app",
+            clientName: "External Application",
+            effectiveUrl,
+          },
+        ]),
+      });
     });
-    const context2 = await browser.newContext();
-    try {
-      const page1 = await context1.newPage();
-      const page2 = await context2.newPage();
 
-      await login(page1);
-      await login(page2);
-
-      await page1.getByTestId("applications").click();
-
-      await expect(page1.getByTestId("applications-list-item")).toHaveCount(1);
-      await expect(
-        page1.getByTestId("applications-list-item").nth(0),
-      ).toContainText("Account Console");
-    } finally {
-      await context1.close();
-      await context2.close();
-    }
-  });
-
-  test("Two applications", async ({ page }) => {
-    await login(page);
-
-    // go to admin console
-    await page.goto("/");
-    await expect(page).toHaveURL(getAdminUrl());
-    await page.waitForURL(getAdminUrl());
-    await expect(page.getByTestId("realmSelector")).toBeVisible();
-
-    await page.goto(getRootPath());
-    await page.waitForURL(getAccountUrl());
-
+    await login(page, testBed.realm);
     await page.getByTestId("applications").click();
 
+    const link = page
+      .getByTestId("applications-list-item")
+      .getByRole("link", { name: /External Application/ });
+    await expect(link).toHaveAttribute("href", effectiveUrl);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noreferrer noopener");
+  });
+
+  test("sorts applications alphabetically", async ({ page }) => {
+    await using testBed = await createTestBed();
+
+    await page.route("**/applications", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            clientId: "zebra-client",
+            clientName: "Zebra Application",
+          },
+          {
+            clientId: "alpha-client",
+            clientName: "Alpha Application",
+          },
+          {
+            clientId: "beta-client",
+            clientName: "Beta Application",
+          },
+        ]),
+      });
+    });
+
+    await login(page, testBed.realm);
+    await page.getByTestId("applications").click();
+
+    const applications = page.getByTestId("applications-list-item");
+
+    await expect(applications).toHaveCount(3);
+    await expect(applications.nth(0)).toContainText("Alpha Application");
+    await expect(applications.nth(1)).toContainText("Beta Application");
+    await expect(applications.nth(2)).toContainText("Zebra Application");
+  });
+
+  test("ends the session of an application", async ({ page }) => {
+    await using testBed = await createTestBed();
+
+    // Mock an application with an active session, the backend behavior is covered by AccountRestServiceTest.
+    await page.route("**/applications", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            clientId: "my-application",
+            clientName: "My Application",
+            inUse: true,
+          },
+        ]),
+      });
+    });
+
+    let sessionsDeleted = false;
+    await page.route(
+      "**/applications/my-application/sessions",
+      async (route) => {
+        expect(route.request().method()).toBe("DELETE");
+        sessionsDeleted = true;
+        await route.fulfill({ status: 204 });
+      },
+    );
+
+    // Log in and navigate to the applications page.
+    await login(page, testBed.realm);
+    await page.getByTestId("applications").click();
+
+    // The application has an active session, so the action is shown.
+    const endSessionButton = page.getByRole("button", {
+      name: "End application session",
+      exact: true,
+    });
+    await expect(endSessionButton).toBeVisible();
+
+    // Click the action and confirm the modal.
+    await endSessionButton.click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    // Expect a success alert after the sessions have been deleted.
+    await expect(page.getByTestId("last-alert")).toContainText(
+      "Ended the application session for My Application",
+    );
+    expect(sessionsDeleted).toBe(true);
+  });
+
+  test("does not show the end session action for applications without an active session or for the Account Console itself", async ({
+    page,
+  }) => {
+    await using testBed = await createTestBed();
+
+    await page.route("**/applications", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            clientId: "account-console",
+            clientName: "Account Console",
+            inUse: true,
+          },
+          {
+            clientId: "other-application",
+            clientName: "Other Application",
+            inUse: false,
+          },
+        ]),
+      });
+    });
+
+    // Log in and navigate to the applications page.
+    await login(page, testBed.realm);
+    await page.getByTestId("applications").click();
+
+    // Neither the Account Console itself nor an application without an active session shows the action.
     await expect(page.getByTestId("applications-list-item")).toHaveCount(2);
     await expect(
-      page
-        .getByTestId("applications-list-item")
-        .filter({ hasText: "Account Console" }),
-    ).toBeVisible();
-    await expect(
-      page
-        .getByTestId("applications-list-item")
-        .filter({ hasText: "security-admin-console" }),
-    ).toBeVisible();
+      page.getByRole("button", {
+        name: "End application session",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  });
+
+  test("shows the end session action for an application with only offline access", async ({
+    page,
+  }) => {
+    await using testBed = await createTestBed();
+
+    // The application has no active online session, only offline access.
+    await page.route("**/applications", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            clientId: "offline-application",
+            clientName: "Offline Application",
+            inUse: false,
+            offlineAccess: true,
+          },
+        ]),
+      });
+    });
+
+    let sessionsDeleted = false;
+    await page.route(
+      "**/applications/offline-application/sessions",
+      async (route) => {
+        expect(route.request().method()).toBe("DELETE");
+        sessionsDeleted = true;
+        await route.fulfill({ status: 204 });
+      },
+    );
+
+    // Log in and navigate to the applications page.
+    await login(page, testBed.realm);
+    await page.getByTestId("applications").click();
+
+    // Offline access counts as "in use" and exposes the action.
+    const listItem = page.getByTestId("applications-list-item");
+    await expect(listItem).toContainText("In use");
+
+    const endSessionButton = page.getByRole("button", {
+      name: "End application session",
+      exact: true,
+    });
+    await expect(endSessionButton).toBeVisible();
+
+    // Click the action and confirm the modal.
+    await endSessionButton.click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+
+    // Expect a success alert after the sessions have been deleted.
+    await expect(page.getByTestId("last-alert")).toContainText(
+      "Ended the application session for Offline Application",
+    );
+    expect(sessionsDeleted).toBe(true);
   });
 });

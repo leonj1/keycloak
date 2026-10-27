@@ -20,8 +20,8 @@ package org.keycloak.authorization.policy.provider.clientscope;
 import java.util.Set;
 import java.util.function.BiFunction;
 
-import org.jboss.logging.Logger;
 import org.keycloak.authorization.AuthorizationProvider;
+import org.keycloak.authorization.Decision.Effect;
 import org.keycloak.authorization.identity.Identity;
 import org.keycloak.authorization.model.Policy;
 import org.keycloak.authorization.policy.evaluation.Evaluation;
@@ -29,6 +29,8 @@ import org.keycloak.authorization.policy.provider.PolicyProvider;
 import org.keycloak.models.ClientScopeModel;
 import org.keycloak.models.RealmModel;
 import org.keycloak.representations.idm.authorization.ClientScopePolicyRepresentation;
+
+import org.jboss.logging.Logger;
 
 /**
  * @author <a href="mailto:yoshiyuki.tabata.jy@hitachi.com">Yoshiyuki Tabata</a>
@@ -48,6 +50,13 @@ public class ClientScopePolicyProvider implements PolicyProvider {
     }
 
     @Override
+    public boolean isValid(Policy policy, AuthorizationProvider authorization) {
+        return representationFunction.apply(policy, authorization).getClientScopes().stream()
+                .filter(ClientScopePolicyRepresentation.ClientScopeDefinition::isRequired)
+                .allMatch(scope -> authorization.getRealm().getClientScopeById(scope.getId()) != null);
+    }
+
+    @Override
     public void evaluate(Evaluation evaluation) {
         Policy policy = evaluation.getPolicy();
         Set<ClientScopePolicyRepresentation.ClientScopeDefinition> clientScopeIds = representationFunction
@@ -55,20 +64,31 @@ public class ClientScopePolicyProvider implements PolicyProvider {
         AuthorizationProvider authorizationProvider = evaluation.getAuthorizationProvider();
         RealmModel realm = authorizationProvider.getKeycloakSession().getContext().getRealm();
         Identity identity = evaluation.getContext().getIdentity();
+        boolean granted = false;
+        boolean missingRequiredClientScope = false;
 
         for (ClientScopePolicyRepresentation.ClientScopeDefinition clientScopeDefinition : clientScopeIds) {
             ClientScopeModel clientScope = realm.getClientScopeById(clientScopeDefinition.getId());
+
+            if (clientScope == null && clientScopeDefinition.isRequired()) {
+                evaluation.setEffect(Effect.INVALID);
+                return;
+            }
 
             if (clientScope != null) {
                 boolean hasClientScope = hasClientScope(identity, clientScope);
 
                 if (!hasClientScope && clientScopeDefinition.isRequired()) {
-                    evaluation.deny();
-                    return;
+                    missingRequiredClientScope = true;
                 } else if (hasClientScope) {
-                    evaluation.grant();
+                    granted = true;
                 }
             }
+        }
+        if (missingRequiredClientScope) {
+            evaluation.deny();
+        } else if (granted) {
+            evaluation.grant();
         }
         logger.debugf("Client Scope Policy %s evaluated to %s", policy.getName(), evaluation.getEffect());
     }

@@ -20,13 +20,13 @@ package org.keycloak.adapters.saml;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Properties;
 import java.util.Set;
 
-import org.jboss.logging.Logger;
 import org.keycloak.adapters.saml.config.parsers.ResourceLoader;
+
+import org.jboss.logging.Logger;
 
 /**
  * A {@link RoleMappingsProvider} implementation that uses a {@code properties} file to determine the mappings that should be applied
@@ -117,7 +117,7 @@ public class PropertiesBasedRoleMapper implements RoleMappingsProvider {
                     this.roleMappings.load(is);
                     logger.debugf("Successfully loaded role mappings from %s", path);
                 } catch (Exception e) {
-                    logger.debugv(e, "Unable to load role mappings from %s", path);
+                    logger.debugv(e, "Unable to load role mappings from {0}", path);
                 }
             } else {
                 throw new RuntimeException("Unable to load role mappings from " + path + ": file does not exist in filesystem");
@@ -131,7 +131,7 @@ public class PropertiesBasedRoleMapper implements RoleMappingsProvider {
                     this.roleMappings.load(is);
                     logger.debugf("Resource loader successfully loaded role mappings from %s", path);
                 } catch (Exception e) {
-                    logger.debugv(e, "Resource loader unable to load role mappings from %s", path);
+                    logger.debugv(e, "Resource loader unable to load role mappings from {0}", path);
                 }
             } else {
                 throw new RuntimeException("Unable to load role mappings from " + path + ": file does not exist in the resource");

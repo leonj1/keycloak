@@ -24,6 +24,11 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.KeycloakSessionFactory;
+import org.keycloak.models.utils.KeycloakModelUtils;
+import org.keycloak.spi.infinispan.JGroupsCertificateProvider;
+
 import org.infinispan.commons.api.Lifecycle;
 import org.infinispan.factories.KnownComponentNames;
 import org.infinispan.factories.annotations.ComponentName;
@@ -41,10 +46,6 @@ import org.infinispan.notifications.cachemanagerlistener.event.ViewChangedEvent;
 import org.infinispan.remoting.transport.Address;
 import org.infinispan.util.concurrent.BlockingManager;
 import org.jboss.logging.Logger;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.KeycloakSessionFactory;
-import org.keycloak.models.utils.KeycloakModelUtils;
-import org.keycloak.spi.infinispan.JGroupsCertificateProvider;
 
 /**
  * Class to handle JGroups certificate reloading for encryption (mTLS).
@@ -98,7 +99,7 @@ public class CertificateReloadManager implements Lifecycle {
             // It is invoked before JGroups starts; it schedules a fast pace reload of the certificate.
             // It is canceled when it gets a view from JGroups.
             // This is here to prevent the case when a node joins during a rotation process.
-            bootFuture = scheduledExecutorService.scheduleAtFixedRate(() -> blockingManager.runBlocking(this::bootReload, "boot-reload"), BOOT_PERIOD.toMillis(), BOOT_PERIOD.toMillis(), TimeUnit.MILLISECONDS);
+            bootFuture = scheduledExecutorService.scheduleAtFixedRate(() -> runBlocking(this::bootReload, "boot-reload"), BOOT_PERIOD.toMillis(), BOOT_PERIOD.toMillis(), TimeUnit.MILLISECONDS);
         }
 
     }
@@ -157,7 +158,7 @@ public class CertificateReloadManager implements Lifecycle {
     public void onViewChanged(ViewChangedEvent event) {
         logger.debug("On view changed");
         // probably a waste to reload, but if we have a partition, we reload the most recent certificate stored.
-        reloadCertificate();
+        runBlocking(this::reloadCertificate, "on-view-changed");
     }
 
     // testing purpose
@@ -183,11 +184,6 @@ public class CertificateReloadManager implements Lifecycle {
         }
     }
 
-    private void onInvalidCertificate() {
-        logger.info("On certificate exception");
-        blockingManager.runBlocking(this::reloadCertificate, "invalid-certificate");
-    }
-
     private void onCertificateReloadResponse(Address address, Void unused, Throwable throwable) {
         if (throwable != null) {
             logger.warnf(throwable, "Node %s failed to handle JGroups certificate reload notification.", address);
@@ -208,10 +204,10 @@ public class CertificateReloadManager implements Lifecycle {
             var delay = KeycloakModelUtils.runJobInTransactionWithResult(sessionFactory, CertificateReloadManager::nextRotationDelay);
             logger.debugf("Next rotation in %s", delay);
             if (delay.isZero()) {
-                blockingManager.runBlocking(this::rotateCertificate, "rotate");
+                runBlocking(this::rotateCertificate, "rotate");
                 return;
             }
-            scheduledFuture = scheduledExecutorService.schedule(() -> blockingManager.runBlocking(this::rotateCertificate, "rotate"), delay.toSeconds(), TimeUnit.SECONDS);
+            scheduledFuture = scheduledExecutorService.schedule(() -> runBlocking(this::rotateCertificate, "rotate"), delay.toSeconds(), TimeUnit.SECONDS);
         }
     }
 
@@ -239,8 +235,18 @@ public class CertificateReloadManager implements Lifecycle {
                 .submitConsumer(ReloadCertificateFunction.getInstance(), this::onCertificateReloadResponse);
     }
 
+    /**
+     * Run the task on a blocking thread, and log any failure as nobody else observes the returned stage.
+     */
+    private void runBlocking(Runnable runnable, String traceId) {
+        blockingManager.runBlocking(runnable, traceId).exceptionally(t -> {
+            logger.warnf(t, "Unexpected failure in JGroups certificate task '%s'", traceId);
+            return null;
+        });
+    }
+
     private void retry(Runnable runnable, String traceId) {
-        scheduledExecutorService.schedule(() -> blockingManager.runBlocking(runnable, traceId), RETRY_WAIT_TIME.toSeconds(), TimeUnit.SECONDS);
+        scheduledExecutorService.schedule(() -> runBlocking(runnable, traceId), RETRY_WAIT_TIME.toSeconds(), TimeUnit.SECONDS);
     }
 
     private record AutoCloseableLock(ReentrantLock innerLock) implements AutoCloseable {

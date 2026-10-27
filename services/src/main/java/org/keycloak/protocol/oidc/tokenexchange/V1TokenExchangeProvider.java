@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.jboss.logging.Logger;
+
 import org.keycloak.OAuth2Constants;
 import org.keycloak.OAuthErrorException;
 import org.keycloak.common.ClientConnection;
@@ -36,6 +36,7 @@ import org.keycloak.common.util.Base64Url;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
+import org.keycloak.models.AuthenticatedClientSessionModel;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.ClientSessionContext;
 import org.keycloak.models.KeycloakSession;
@@ -61,9 +62,13 @@ import org.keycloak.services.managers.AuthenticationSessionManager;
 import org.keycloak.services.managers.UserSessionManager;
 import org.keycloak.services.resources.admin.AdminAuth;
 import org.keycloak.services.resources.admin.fgap.AdminPermissions;
+import org.keycloak.services.util.DefaultClientSessionContext;
+import org.keycloak.services.util.UserSessionUtil;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.sessions.RootAuthenticationSessionModel;
 import org.keycloak.util.TokenUtil;
+
+import org.jboss.logging.Logger;
 
 import static org.keycloak.models.ImpersonationSessionNote.IMPERSONATOR_CLIENT;
 import static org.keycloak.models.ImpersonationSessionNote.IMPERSONATOR_ID;
@@ -78,10 +83,6 @@ public class V1TokenExchangeProvider extends AbstractTokenExchangeProvider {
 
     private static final Logger logger = Logger.getLogger(V1TokenExchangeProvider.class);
 
-    @Override
-    public int getVersion() {
-        return 1;
-    }
 
     @Override
     public boolean supports(TokenExchangeContext context) {
@@ -115,16 +116,17 @@ public class V1TokenExchangeProvider extends AbstractTokenExchangeProvider {
 
             }
 
-            AuthenticationManager.AuthResult authResult = AuthenticationManager.verifyIdentityToken(session, realm, session.getContext().getUri(), clientConnection, true, true, null, false, subjectToken, context.getHeaders());
+            AuthenticationManager.AuthResult authResult = AuthenticationManager.verifyIdentityToken(session, realm, session.getContext().getUri(), clientConnection, true, true, null,
+                    false, subjectToken, context.getHeaders(), verifier -> {});
             if (authResult == null) {
                 event.detail(Details.REASON, "subject_token validation failure");
                 event.error(Errors.INVALID_TOKEN);
                 throw new CorsErrorResponseException(cors, OAuthErrorException.INVALID_REQUEST, "Invalid token", Response.Status.BAD_REQUEST);
             }
 
-            tokenUser = authResult.getUser();
-            tokenSession = authResult.getSession();
-            token = authResult.getToken();
+            tokenUser = authResult.user();
+            tokenSession = authResult.session();
+            token = authResult.token();
         }
 
         String requestedSubject = context.getFormParams().getFirst(OAuth2Constants.REQUESTED_SUBJECT);
@@ -137,7 +139,7 @@ public class V1TokenExchangeProvider extends AbstractTokenExchangeProvider {
                 requestedUser = session.users().getUserById(realm, requestedSubject);
             }
 
-            if (requestedUser == null) {
+            if (requestedUser == null || !requestedUser.isEnabled()) {
                 // We always returned access denied to avoid username fishing
                 event.detail(Details.REASON, "requested_subject not found");
                 event.error(Errors.NOT_ALLOWED);
@@ -279,10 +281,10 @@ public class V1TokenExchangeProvider extends AbstractTokenExchangeProvider {
             targetClientScopes.addAll(targetClient.getClientScopes(true).keySet());
             targetClientScopes.addAll(targetClient.getClientScopes(false).keySet());
             //from return scope remove scopes that are not default or optional scopes for targetClient
-            scope = Arrays.stream(scope.split(" ")).filter(s -> "openid".equals(s) || (targetClientScopes.contains(Profile.isFeatureEnabled(Profile.Feature.DYNAMIC_SCOPES) ? s.split(":")[0] : s))).collect(Collectors.joining(" "));
+            scope = Arrays.stream(scope.split(" ")).filter(s -> "openid".equals(s) || (targetClientScopes.contains(Profile.isFeatureEnabled(Profile.Feature.PARAMETERIZED_SCOPES) ? s.split(":")[0] : s))).collect(Collectors.joining(" "));
         } else if (token != null && token.getScope() != null) {
             String subjectTokenScopes = token.getScope();
-            if (Profile.isFeatureEnabled(Profile.Feature.DYNAMIC_SCOPES)) {
+            if (Profile.isFeatureEnabled(Profile.Feature.PARAMETERIZED_SCOPES)) {
                 Set<String> subjectTokenScopesSet = Arrays.stream(subjectTokenScopes.split(" ")).map(s -> s.split(":")[0]).collect(Collectors.toSet());
                 scope = Arrays.stream(scope.split(" ")).filter(sc -> subjectTokenScopesSet.contains(sc.split(":")[0])).collect(Collectors.joining(" "));
             } else {
@@ -294,7 +296,7 @@ public class V1TokenExchangeProvider extends AbstractTokenExchangeProvider {
             targetClientScopes.addAll(targetClient.getClientScopes(true).keySet());
             targetClientScopes.addAll(targetClient.getClientScopes(false).keySet());
             //from return scope remove scopes that are not default or optional scopes for targetClient
-            scope = Arrays.stream(scope.split(" ")).filter(s -> "openid".equals(s) || (targetClientScopes.contains(Profile.isFeatureEnabled(Profile.Feature.DYNAMIC_SCOPES) ? s.split(":")[0] : s))).collect(Collectors.joining(" "));
+            scope = Arrays.stream(scope.split(" ")).filter(s -> "openid".equals(s) || (targetClientScopes.contains(Profile.isFeatureEnabled(Profile.Feature.PARAMETERIZED_SCOPES) ? s.split(":")[0] : s))).collect(Collectors.joining(" "));
         }
         return scope;
     }
@@ -318,12 +320,48 @@ public class V1TokenExchangeProvider extends AbstractTokenExchangeProvider {
         AuthenticationSessionModel authSession = createSessionModel(targetUserSession, rootAuthSession, targetUser, targetClient, scope);
 
         AuthenticationManager.setClientScopesInSession(session, authSession);
-        ClientSessionContext clientSessionCtx = TokenManager.attachAuthenticationSession(this.session, targetUserSession, authSession);
 
-        if (!AuthenticationManager.isClientSessionValid(realm, client, targetUserSession, targetUserSession.getAuthenticatedClientSessionByClient(client.getId()))) {
+        // For offline sessions, attachAuthenticationSession must not call createClientSession directly
+        // on the offline user session: createClientSession writes to the online Infinispan cache and
+        // skips UserSessionPersisterProvider, resulting in an offline=0 row. The correct path is
+        // createOfflineClientSession, but it requires a source client session to copy data from.
+        // Strategy: use a transient wrapper only when no existing client session is present
+        // (so createClientSession runs safely on the transient session). When a session already
+        // exists, attach directly so restartClientSession() or update logic applies correctly.
+        final boolean isOfflineSession = targetUserSession.isOffline();
+
+        ClientSessionContext clientSessionCtx;
+        AuthenticatedClientSessionModel existingTargetSession =
+                targetUserSession.getAuthenticatedClientSessionByClient(targetClient.getId());
+        if (isOfflineSession && existingTargetSession == null) {
+            UserSessionModel transientSession = UserSessionUtil.createTransientUserSession(session, targetUserSession);
+            AuthenticatedClientSessionModel transientClientSession =
+                    TokenManager.attachAuthenticationSession(this.session, transientSession, authSession).getClientSession();
+            AuthenticatedClientSessionModel offlineClientSession =
+                    session.sessions().createOfflineClientSession(transientClientSession, targetUserSession);
+            // Rebuild around the persisted offline session so the encoder marks the token OFFLINE,
+            // not OFFLINE_TRANSIENT_CLIENT (which would bypass revocation checks).
+            clientSessionCtx = DefaultClientSessionContext.fromClientSessionScopeParameter(offlineClientSession, session);
+        } else {
+            clientSessionCtx = TokenManager.attachAuthenticationSession(this.session, targetUserSession, authSession);
+        }
+
+        // Re-read after the target attach so that when target == requester the block below is
+        // correctly skipped (the session was just created/updated by the first attach).
+        AuthenticatedClientSessionModel existingRequesterSession =
+                targetUserSession.getAuthenticatedClientSessionByClient(client.getId());
+        if (!AuthenticationManager.isClientSessionValid(realm, client, targetUserSession, existingRequesterSession)) {
             // create the requester client session if needed
             AuthenticationSessionModel clientAuthSession = createSessionModel(targetUserSession, rootAuthSession, targetUser, client, scope);
-            TokenManager.attachAuthenticationSession(this.session, targetUserSession, clientAuthSession);
+            if (isOfflineSession && existingRequesterSession == null) {
+                UserSessionModel transientSession = UserSessionUtil.createTransientUserSession(session, targetUserSession);
+                AuthenticatedClientSessionModel transientClientSession =
+                        TokenManager.attachAuthenticationSession(this.session, transientSession, clientAuthSession).getClientSession();
+                session.sessions().createOfflineClientSession(transientClientSession, targetUserSession);
+            } else {
+                // Session exists but is invalid: restartClientSession() is called internally.
+                TokenManager.attachAuthenticationSession(this.session, targetUserSession, clientAuthSession);
+            }
         }
 
         updateUserSessionFromClientAuth(targetUserSession);

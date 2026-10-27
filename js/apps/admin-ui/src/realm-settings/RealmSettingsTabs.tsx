@@ -18,7 +18,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useAdminClient } from "../admin-client";
 import { useConfirmDialog } from "../components/confirm-dialog/ConfirmDialog";
-import type { KeyValueType } from "../components/key-value-form/key-value-convert";
+import type { RealmLoAMappingType } from "../components/realm-loa-mapping/RealmLoAMapping";
 import {
   RoutableTabs,
   useRoutableTab,
@@ -27,13 +27,18 @@ import { ViewHeader } from "../components/view-header/ViewHeader";
 import { useAccess } from "../context/access/Access";
 import { useRealm } from "../context/realm-context/RealmContext";
 import { toDashboard } from "../dashboard/routes/Dashboard";
-import type { Environment } from "../environment";
+import type { Environment } from "../environment-types";
 import helpUrls from "../help-urls";
-import { convertFormValuesToObject, convertToFormValues } from "../util";
+import {
+  convertFormValuesToObject,
+  convertToFormValues,
+  resolveDisplayName,
+} from "../util";
 import { getAuthorizationHeaders } from "../utils/getAuthorizationHeaders";
 import { joinPath } from "../utils/joinPath";
 import useIsFeatureEnabled, { Feature } from "../utils/useIsFeatureEnabled";
 import useLocale from "../utils/useLocale";
+import { DEFLATE_COMPRESSION } from "./constants";
 import { RealmSettingsEmailTab } from "./EmailTab";
 import { RealmSettingsGeneralTab } from "./GeneralTab";
 import { RealmSettingsLoginTab } from "./LoginTab";
@@ -62,6 +67,7 @@ type RealmSettingsHeaderProps = {
   value: boolean;
   save: () => void;
   realmName: string;
+  displayName: string;
   refresh: () => void;
 };
 
@@ -70,6 +76,7 @@ const RealmSettingsHeader = ({
   onChange,
   value,
   realmName,
+  displayName,
   refresh,
 }: RealmSettingsHeaderProps) => {
   const { adminClient } = useAdminClient();
@@ -101,7 +108,7 @@ const RealmSettingsHeader = ({
       try {
         await adminClient.realms.del({ realm: realmName });
         addAlert(t("deletedSuccessRealmSetting"), AlertVariant.success);
-        navigate(toDashboard({ realm: environment.masterRealm }));
+        void navigate(toDashboard({ realm: environment.masterRealm }));
         refresh();
       } catch (error) {
         addError("deleteErrorRealmSetting", error);
@@ -122,7 +129,8 @@ const RealmSettingsHeader = ({
         onClose={() => setPartialExportOpen(false)}
       />
       <ViewHeader
-        titleKey={realmName}
+        titleKey={displayName}
+        noTranslate
         subKey="realmSettingsExplain"
         helpUrl={helpUrls.realmSettingsUrl}
         divider={false}
@@ -201,10 +209,10 @@ export const RealmSettingsTabs = () => {
           combinedLocales.map(async (locale) => {
             try {
               const response =
-                await adminClient.realms.getRealmLocalizationTexts({
+                (await adminClient.realms.getRealmLocalizationTexts({
                   realm: realmName,
                   selectedLocale: locale,
-                });
+                })) as Record<string, string> | undefined;
 
               if (response) {
                 setTableData([response]);
@@ -218,7 +226,7 @@ export const RealmSettingsTabs = () => {
         return [];
       }
     };
-    fetchLocalizationTexts();
+    void fetchLocalizationTexts();
   }, [setValue, realm]);
 
   const save = async (r: UIRealmRepresentation) => {
@@ -227,13 +235,32 @@ export const RealmSettingsTabs = () => {
       r.attributes?.["acr.loa.map"] &&
       typeof r.attributes["acr.loa.map"] !== "string"
     ) {
+      if (isFeatureEnabled(Feature.StepUpAuthenticationSaml)) {
+        r.attributes["acr.uri.map"] = JSON.stringify(
+          Object.fromEntries(
+            (r.attributes["acr.loa.map"] as RealmLoAMappingType[])
+              .filter(({ acr, uri }) => acr !== "" && uri && uri !== "")
+              .map(({ acr, uri }) => [acr, uri]),
+          ),
+        );
+      }
       r.attributes["acr.loa.map"] = JSON.stringify(
         Object.fromEntries(
-          (r.attributes["acr.loa.map"] as KeyValueType[])
-            .filter(({ key }) => key !== "")
-            .map(({ key, value }) => [key, value]),
+          (r.attributes["acr.loa.map"] as RealmLoAMappingType[])
+            .filter(({ acr }) => acr !== "")
+            .map(({ acr, loa }) => [acr, loa]),
         ),
       );
+    }
+
+    // The DEF compression switch uses "" when off; older versions stored "true"/"false".
+    if (r.attributes?.["oid4vci.request.zip.algorithms"] === "true") {
+      r.attributes["oid4vci.request.zip.algorithms"] = DEFLATE_COMPRESSION;
+    } else if (
+      r.attributes?.["oid4vci.request.zip.algorithms"] === "false" ||
+      r.attributes?.["oid4vci.request.zip.algorithms"] === ""
+    ) {
+      delete r.attributes["oid4vci.request.zip.algorithms"];
     }
 
     try {
@@ -264,9 +291,9 @@ export const RealmSettingsTabs = () => {
       addError("realmSaveError", error);
     }
 
-    const isRealmRenamed = realmName !== (r.realm || realm?.realm);
+    const isRealmRenamed = realmName !== (r.realm || realm.realm);
     if (isRealmRenamed) {
-      navigate(toRealmSettings({ realm: r.realm!, tab: "general" }));
+      void navigate(toRealmSettings({ realm: r.realm!, tab: "general" }));
     }
     refresh();
   };
@@ -315,6 +342,7 @@ export const RealmSettingsTabs = () => {
             value={field.value}
             onChange={field.onChange}
             realmName={realmName}
+            displayName={resolveDisplayName(t, realm.displayName, realmName)}
             refresh={refreshHeader}
             save={() => save(getValues())}
           />

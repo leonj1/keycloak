@@ -17,17 +17,8 @@
 
 package org.keycloak.sdjwt.consumer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import org.keycloak.common.VerificationException;
-import org.keycloak.crypto.SignatureVerifierContext;
-import org.keycloak.jose.jwk.JSONWebKeySet;
-import org.keycloak.jose.jwk.JWK;
-import org.keycloak.sdjwt.IssuerSignedJWT;
-import org.keycloak.sdjwt.JwkParsingUtils;
-import org.keycloak.sdjwt.SdJws;
-import org.keycloak.sdjwt.SdJwtUtils;
-
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -37,6 +28,20 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+import org.keycloak.common.VerificationException;
+import org.keycloak.crypto.SignatureVerifierContext;
+import org.keycloak.jose.jwk.JSONWebKeySet;
+import org.keycloak.jose.jwk.JWK;
+import org.keycloak.sdjwt.IssuerSignedJWT;
+import org.keycloak.sdjwt.JwkParsingUtils;
+import org.keycloak.sdjwt.SdJwtUtils;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+
+import static org.keycloak.OID4VCConstants.CLAIM_NAME_ISSUER;
+import static org.keycloak.OID4VCConstants.JWT_VC_ISSUER_END_POINT;
 
 /**
  * A trusted Issuer for running SD-JWT VP verification.
@@ -51,8 +56,6 @@ import java.util.stream.Collectors;
  * </a>
  */
 public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
-
-    private static final String JWT_VC_ISSUER_END_POINT = "/.well-known/jwt-vc-issuer";
 
     private final Pattern issuerUriPattern;
     private final HttpDataFetcher httpDataFetcher;
@@ -86,10 +89,10 @@ public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
     public List<SignatureVerifierContext> resolveIssuerVerifyingKeys(IssuerSignedJWT issuerSignedJWT)
             throws VerificationException {
         // Read iss (claim) and kid (header)
-        String iss = Optional.ofNullable(issuerSignedJWT.getPayload().get(SdJws.CLAIM_NAME_ISSUER))
+        String iss = Optional.ofNullable(issuerSignedJWT.getPayload().get(CLAIM_NAME_ISSUER))
                 .map(JsonNode::asText)
                 .orElse("");
-        String kid = issuerSignedJWT.getHeader().getKeyId();
+        String kid = issuerSignedJWT.getJwsHeader().getKeyId();
 
         // Match the read iss claim against the trusted pattern
         Matcher matcher = issuerUriPattern.matcher(iss);
@@ -149,19 +152,29 @@ public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
     }
 
     private void validateHttpsIssuerUri(String issuerUri) throws VerificationException {
-        if (!issuerUri.startsWith("https://")) {
-            throw new VerificationException(
-                    "HTTPS URI required to retrieve JWT VC Issuer Metadata"
-            );
+        validateHttpsUri(issuerUri, "HTTPS URI required to retrieve JWT VC Issuer Metadata");
+    }
+
+    private void validateHttpsUri(String uri, String errorMessage) throws VerificationException {
+        // URI schemes are case-insensitive (RFC 3986), so parse and compare the scheme
+        // rather than prefix-matching the raw string. Malformed values surface as a
+        // VerificationException so they cannot slip past as an un-dereferenceable URI.
+        String scheme;
+        try {
+            scheme = URI.create(uri).getScheme();
+        } catch (IllegalArgumentException ex) {
+            throw new VerificationException(errorMessage, ex);
+        }
+
+        if (scheme == null || !scheme.equalsIgnoreCase("https")) {
+            throw new VerificationException(errorMessage);
         }
     }
 
     private List<JWK> fetchIssuerMetadataJwks(String issuerUri) throws VerificationException {
-        // Build full URL to JWT VC metadata endpoint
-
-        issuerUri = normalizeUri(issuerUri);
-        String jwtVcIssuerUri = issuerUri
-                .concat(JWT_VC_ISSUER_END_POINT); // Append well-known path
+        // Build full URL to JWT VC metadata endpoint according to draft-ietf-oauth-sd-jwt-vc-13
+        String normalizedIssuerUri = normalizeUri(issuerUri);
+        String jwtVcIssuerUri = buildJwtVcIssuerMetadataUri(normalizedIssuerUri);
 
         // Fetch and parse metadata
 
@@ -178,10 +191,10 @@ public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
 
         String exposedIssuerUri = normalizeUri(issuerMetadata.getIssuer());
 
-        if (!issuerUri.equals(exposedIssuerUri)) {
+        if (!normalizedIssuerUri.equals(exposedIssuerUri)) {
             throw new VerificationException(String.format(
                     "Unexpected metadata's issuer. Expected=%s, Got=%s",
-                    issuerUri, exposedIssuerUri
+                    normalizedIssuerUri, exposedIssuerUri
             ));
         }
 
@@ -191,6 +204,10 @@ public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
         JSONWebKeySet jwks = issuerMetadata.getJwks();
 
         if (jwks == null && jwksUri != null) {
+            // The JWKS URI yields the keys that verify the issuer-signed JWT, so it must be
+            // retrieved over HTTPS just like the issuer metadata endpoint that published it.
+            validateHttpsUri(jwksUri, "HTTPS URI required to retrieve issuer JWKS");
+
             // Dereference JWKS URI
             JsonNode jwksNode = fetchData(jwksUri);
 
@@ -210,6 +227,26 @@ public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
         return Arrays.asList(jwks.getKeys());
     }
 
+    static String buildJwtVcIssuerMetadataUri(String issuerUri) throws VerificationException {
+        try {
+            URI parsedIssuer = URI.create(issuerUri);
+            String issuerPath = Optional.ofNullable(parsedIssuer.getRawPath()).orElse("");
+            String metadataPath = JWT_VC_ISSUER_END_POINT + issuerPath;
+
+            URI metadata = new URI(
+                    parsedIssuer.getScheme(),
+                    parsedIssuer.getAuthority(),
+                    metadataPath,
+                    null,
+                    null
+            );
+
+            return metadata.toString();
+        } catch (IllegalArgumentException | URISyntaxException ex) {
+            throw new VerificationException("Invalid issuer URI", ex);
+        }
+    }
+
     private JsonNode fetchData(String uri) throws VerificationException {
         try {
             return Objects.requireNonNull(httpDataFetcher.fetchJsonData(uri));
@@ -221,7 +258,7 @@ public class JwtVcMetadataTrustedSdJwtIssuer implements TrustedSdJwtIssuer {
         }
     }
 
-    private String normalizeUri(String uri) {
+    private static String normalizeUri(String uri) {
         // Remove any trailing slash
         return uri.replaceAll("/$", "");
     }

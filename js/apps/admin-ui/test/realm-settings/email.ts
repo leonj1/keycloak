@@ -1,5 +1,5 @@
-import { Page, expect } from "@playwright/test";
-import { switchOn } from "../utils/form";
+import { type Page, expect } from "@playwright/test";
+import { switchOn } from "../utils/form.ts";
 
 export async function goToEmailTab(page: Page) {
   await page.getByTestId("rs-email-tab").click();
@@ -66,6 +66,14 @@ export async function assertEmailPageWithTokenAuth(page: Page) {
   await expect(getAuthTokenScope(page)).toHaveValue("scope");
   await expect(getAuthTokenClientId(page)).toHaveValue("client-id");
   await expect(getAuthTokenClientSecret(page)).toHaveValue("**********");
+}
+
+export async function assertTestConnectionHint(page: Page, email: string) {
+  await expect(
+    page.getByText(
+      `When testing the connection an e-mail will be sent to the current user (${email}).`,
+    ),
+  ).toBeVisible();
 }
 
 function getFrom(page: Page) {

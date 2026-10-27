@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { clickSaveButton, selectItem } from "../utils/form";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { goToRealm } from "../utils/sidebar";
-import { assertRowExists } from "../utils/table";
+import adminClient from "../utils/AdminClient.ts";
+import { clickSaveButton, selectItem } from "../utils/form.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { goToRealm } from "../utils/sidebar.ts";
+import { assertRowExists } from "../utils/table.ts";
 import {
   clickCreateNewPolicy,
   clickCreatePermission,
@@ -17,16 +17,24 @@ import {
   goToPermissions,
   openSearchPanel,
   pickGroup,
+  pickOrganization,
+  pickRole,
   removeGroup,
+  removeOrganization,
+  removeRole,
+  selectClient,
   selectResource,
-} from "./main";
-import { fillPolicyForm, goToPolicies } from "./policy";
+} from "./main.ts";
+import { fillPolicyForm, goToPolicies } from "./policy.ts";
 
-test.describe("Permissions section tests", () => {
+test.describe.serial("Permissions section tests", () => {
   const realmName = `permissions-${uuid()}`;
 
   test.beforeAll(async () => {
-    await adminClient.createRealm(realmName, { adminPermissionsEnabled: true });
+    await adminClient.createRealm(realmName, {
+      adminPermissionsEnabled: true,
+      organizationsEnabled: true,
+    });
     await adminClient.createUser({
       realm: realmName,
       username: "test-user",
@@ -34,6 +42,21 @@ test.describe("Permissions section tests", () => {
     });
     await adminClient.createGroup("one", realmName);
     await adminClient.createGroup("two", realmName);
+    await adminClient.createOrganization({
+      name: "one",
+      realm: realmName,
+      enabled: true,
+    });
+    await adminClient.createOrganization({
+      name: "two",
+      realm: realmName,
+      enabled: true,
+    });
+    // Named like the account client's own role, to tell the two apart.
+    await adminClient.createRealmRole({
+      realm: realmName,
+      name: "view-profile",
+    });
   });
   test.afterAll(() => adminClient.deleteRealm(realmName));
 
@@ -114,9 +137,103 @@ test.describe("Permissions section tests", () => {
       page,
       "Successfully updated the permission",
     );
+    await goToPermissions(page);
+    await deletePermission(page, "test-group-permission");
   });
 
-  test.describe("evaluate permissions", () => {
+  test("should edit organization permission", async ({ page }) => {
+    await clickCreatePermission(page);
+    await selectResource(page, "Organizations");
+    await fillPermissionForm(page, {
+      name: "test-organization-permission",
+      scopes: ["view"],
+      enforcementMode: "specificResources",
+    });
+    await pickOrganization(page, "one");
+    await pickOrganization(page, "two");
+
+    await clickCreateNewPolicy(page);
+    await fillPolicyForm(
+      page,
+      {
+        name: "test-organization-policy",
+        description: "test-description",
+        type: "User",
+        user: "test-user",
+      },
+      true,
+    );
+
+    await clickCreatePolicySaveButton(page);
+    await assertNotificationMessage(page, "Successfully created the policy");
+    await clickSaveButton(page);
+    await removeOrganization(page, "one");
+    await clickSaveButton(page);
+    await assertNotificationMessage(
+      page,
+      "Successfully updated the permission",
+    );
+    await goToPermissions(page);
+    await deletePermission(page, "test-organization-permission");
+  });
+
+  test("should edit role permission", async ({ page }) => {
+    await clickCreatePermission(page);
+    await selectResource(page, "Roles");
+    await fillPermissionForm(page, {
+      name: "test-role-permission",
+      scopes: ["map-role"],
+      enforcementMode: "specificResources",
+    });
+    await pickRole(page, "roles", "view-profile");
+    await pickRole(page, "client", "view-profile account");
+
+    // A realm role and a client role of the same name are told apart.
+    await expect(
+      page.getByRole("button", {
+        name: "Remove role view-profile",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: "Remove role account view-profile",
+        exact: true,
+      }),
+    ).toBeVisible();
+
+    await clickCreateNewPolicy(page);
+    await fillPolicyForm(
+      page,
+      {
+        name: "test-role-policy",
+        description: "test-description",
+        type: "User",
+        user: "test-user",
+      },
+      true,
+    );
+
+    await clickCreatePolicySaveButton(page);
+    await assertNotificationMessage(page, "Successfully created the policy");
+    await clickSaveButton(page);
+    await removeRole(page, "account view-profile");
+    await expect(
+      page.getByRole("button", {
+        name: "Remove role account view-profile",
+        exact: true,
+      }),
+    ).toBeHidden();
+    await clickSaveButton(page);
+    await assertNotificationMessage(
+      page,
+      "Successfully updated the permission",
+    );
+    await goToPermissions(page);
+    await deletePermission(page, "test-role-permission");
+  });
+
+  test.describe.serial("evaluate permissions", () => {
     test.beforeAll(async () => {
       await adminClient.createUser({
         realm: realmName,
@@ -150,7 +267,7 @@ test.describe("Permissions section tests", () => {
       await goToEvaluation(page);
       await selectItem(page, page.getByTestId("user"), "other-user");
       await selectItem(page, "#resourceType", "Clients");
-      await selectItem(page, "#clients", "account");
+      await selectClient(page, "account");
       await selectItem(page, "#authScopes", "view");
       await page.getByTestId("permission-eval").click();
 
@@ -163,7 +280,7 @@ test.describe("Permissions section tests", () => {
       await goToEvaluation(page);
       await selectItem(page, page.getByTestId("user"), "user1");
       await selectItem(page, "#resourceType", "Clients");
-      await selectItem(page, "#clients", "account");
+      await selectClient(page, "account");
       await selectItem(page, "#authScopes", "view");
       await page.getByTestId("permission-eval").click();
 
@@ -171,9 +288,17 @@ test.describe("Permissions section tests", () => {
         page.getByRole("heading", { name: "Warning alert: account with" }),
       ).toBeVisible();
     });
+
+    test("should select groups for evaluation", async ({ page }) => {
+      await goToEvaluation(page);
+      await selectItem(page, page.getByTestId("user"), "user1");
+      await selectItem(page, "#resourceType", "Groups");
+
+      await expect(page.getByTestId("select-group-button")).toBeVisible();
+    });
   });
 
-  test.describe("permission search", () => {
+  test.describe.serial("permission search", () => {
     test.beforeAll(async () => {
       for (let i = 0; i < 5; i++) {
         await adminClient.createPermission({

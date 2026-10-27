@@ -33,25 +33,20 @@ import java.util.stream.Stream;
 
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.ForbiddenException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.Status;
 
-import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
-import org.eclipse.microprofile.openapi.annotations.media.Content;
-import org.eclipse.microprofile.openapi.annotations.media.Schema;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
-import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
-import org.jboss.logging.Logger;
 import org.keycloak.OAuthErrorException;
-import org.keycloak.authorization.fgap.AdminPermissionsSchema;
 import org.keycloak.authorization.AuthorizationProvider;
 import org.keycloak.authorization.admin.representation.PolicyEvaluationResponseBuilder;
 import org.keycloak.authorization.attribute.Attributes;
 import org.keycloak.authorization.common.DefaultEvaluationContext;
 import org.keycloak.authorization.common.KeycloakIdentity;
+import org.keycloak.authorization.fgap.AdminPermissionsSchema;
 import org.keycloak.authorization.model.Resource;
 import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.authorization.model.ResourceWrapper;
@@ -87,6 +82,13 @@ import org.keycloak.services.resources.KeycloakOpenAPI;
 import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
+import org.eclipse.microprofile.openapi.annotations.extensions.Extension;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.jboss.logging.Logger;
+
 /**
  * @author <a href="mailto:psilva@redhat.com">Pedro Igor</a>
  */
@@ -113,6 +115,7 @@ public class PolicyEvaluationService {
             responseCode = "200",
             content = @Content(schema = @Schema(implementation = PolicyEvaluationResponse.class))
         ),
+        @APIResponse(responseCode = "403", description = "Forbidden"),
         @APIResponse(responseCode = "500", description = "Internal Server Error")
     })
     public Response evaluate(PolicyEvaluationRequest evaluationRequest) {
@@ -150,7 +153,7 @@ public class PolicyEvaluationService {
         EvaluationDecisionCollector decision = new EvaluationDecisionCollector(authorization, resourceServer, request);
 
         if (permissions.isEmpty()) {
-            if (AdminPermissionsSchema.SCHEMA.isAdminPermissionsEnabled(authorization.getRealm())) {
+            if (AdminPermissionsSchema.SCHEMA.isAdminPermissionClient(authorization.getRealm(), resourceServer.getId())) {
                 return decision;
             }
             return authorization.evaluators().from(evaluationContext, resourceServer, request).evaluate(decision);
@@ -323,6 +326,11 @@ public class PolicyEvaluationService {
             }
 
             if (userModel != null) {
+                try {
+                    this.auth.users().requireView(userModel);
+                } catch (ForbiddenException e) {
+                    throw new ForbiddenException("You have no access to this user");
+                }
                 String clientId = representation.getClientId();
 
                 if (clientId == null) {
@@ -331,6 +339,14 @@ public class PolicyEvaluationService {
 
                 if (clientId != null) {
                     ClientModel clientModel = realm.getClientById(clientId);
+
+                    if (clientModel != null && !clientId.equals(resourceServer.getClientId())) {
+                        try {
+                            this.auth.clients().requireView(clientModel);
+                        } catch (ForbiddenException e) {
+                            throw new ForbiddenException("You have no access to this client");
+                        }
+                    }
 
                     AuthenticationSessionModel authSession = keycloakSession.authenticationSessions().createRootAuthenticationSession(realm)
                             .createAuthenticationSession(clientModel);
@@ -342,7 +358,7 @@ public class PolicyEvaluationService {
                     AuthenticationManager.setClientScopesInSession(keycloakSession, authSession);
                     ClientSessionContext clientSessionCtx = TokenManager.attachAuthenticationSession(keycloakSession, userSession, authSession);
 
-                    accessToken = new TokenManager().createClientAccessToken(keycloakSession, realm, clientModel, userModel, userSession, clientSessionCtx);
+                    accessToken = new TokenManager().createClientAccessToken(keycloakSession, realm, clientModel, userModel, userSession, clientSessionCtx, clientSessionCtx.isOfflineTokenRequested());
                 }
             }
         }
@@ -356,6 +372,14 @@ public class PolicyEvaluationService {
 
             if (clientId != null) {
                 client = realm.getClientById(clientId);
+
+                if (client != null && !clientId.equals(resourceServer.getClientId())) {
+                    try {
+                        this.auth.clients().requireView(client);
+                    } catch (ForbiddenException e) {
+                        throw new ForbiddenException("You have no access to this client");
+                    }
+                }
             }
 
             if (client == null) {

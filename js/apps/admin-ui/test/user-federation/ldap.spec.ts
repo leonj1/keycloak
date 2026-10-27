@@ -1,18 +1,18 @@
 import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { goToRealm, goToUserFederation } from "../utils/sidebar";
-import { clickAddProvider, clickSave } from "./kerberos";
+import adminClient from "../utils/AdminClient.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { goToRealm, goToUserFederation } from "../utils/sidebar.ts";
+import { clickAddProvider, clickSave } from "./kerberos.ts";
 import {
   assertEvictionValues,
   clickLdapCard,
   fillEviction,
   fillLdapForm,
   selectEvictionPolicy,
-} from "./ldap";
-import { switchToggle } from "../utils/form";
+} from "./ldap.ts";
+import { switchToggle } from "../utils/form.ts";
 
 const provider = "ldap";
 
@@ -60,7 +60,7 @@ const savedSuccessMessage = "User federation provider successfully saved";
 const validatePasswordPolicyFailMessage =
   "User federation provider could not be saved: Validate Password Policy is applicable only with WRITABLE edit mode";
 
-test.describe("User Federation LDAP tests", () => {
+test.describe.serial("User Federation LDAP tests", () => {
   const realmName = `user-federation-ldap-${uuid()}`;
 
   test.beforeAll(() => adminClient.createRealm(realmName));
@@ -101,7 +101,7 @@ test.describe("User Federation LDAP tests", () => {
     await goToUserFederation(page);
   });
 
-  test.describe("Edit provider", () => {
+  test.describe.serial("Edit provider", () => {
     test.beforeAll(() =>
       adminClient.createUserFederation(realmName, {
         providerId: provider,
@@ -207,5 +207,65 @@ test.describe("User Federation LDAP tests", () => {
       await clickSave(page, provider);
       await assertNotificationMessage(page, savedSuccessMessage);
     });
+  });
+});
+
+test.describe.serial("User Federation LDAP enabled toggle access", () => {
+  const realmName = `user-federation-ldap-access-${uuid()}`;
+  const viewOnlyUser = `ldap-view-only-${uuid()}`;
+  const password = "password";
+
+  test.beforeAll(async () => {
+    await adminClient.createRealm(realmName);
+    await adminClient.createUserFederation(realmName, {
+      providerId: provider,
+      name: firstLdapName,
+      config: {
+        vendor: [firstLdapVendor],
+        connectionUrl: [connectionUrlValid],
+        bindType: [bindTypeSimple],
+        bindDn: [bindDnCnDc],
+        bindCredential: [bindCredsValid],
+        editMode: [editModeReadOnly],
+        usersDn: [firstUsersDn],
+        usernameLDAPAttribute: [firstUserLdapAtt],
+        rdnLDAPAttribute: [firstRdnLdapAtt],
+      },
+    });
+    const user = await adminClient.createUser({
+      username: viewOnlyUser,
+      enabled: true,
+      credentials: [{ type: "password", value: password }],
+    });
+    await adminClient.addClientRoleToUser(user.id!, `${realmName}-realm`, [
+      "view-realm",
+    ]);
+  });
+
+  test.afterAll(async () => {
+    await adminClient.deleteUser(viewOnlyUser);
+    await adminClient.deleteRealm(realmName);
+  });
+
+  test("Should disable the enabled toggle for a view-realm only user", async ({
+    page,
+  }) => {
+    await login(page, { username: viewOnlyUser, password });
+    await goToRealm(page, realmName);
+    await goToUserFederation(page);
+    await clickLdapCard(page, firstLdapName);
+
+    await expect(page.getByTestId("LDAP-switch")).toBeDisabled();
+  });
+
+  test("Should enable the enabled toggle for a manage-realm user", async ({
+    page,
+  }) => {
+    await login(page);
+    await goToRealm(page, realmName);
+    await goToUserFederation(page);
+    await clickLdapCard(page, firstLdapName);
+
+    await expect(page.getByTestId("LDAP-switch")).toBeEnabled();
   });
 });

@@ -17,11 +17,12 @@
 
 package org.keycloak.testsuite.federation.ldap.noimport;
 
+import org.keycloak.testsuite.federation.ldap.LDAPGroupMapperTest;
+
 import org.junit.FixMethodOrder;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runners.MethodSorters;
-import org.keycloak.testsuite.federation.ldap.LDAPGroupMapperTest;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -52,6 +53,20 @@ public class LDAPGroupMapperNoImportTest extends LDAPGroupMapperTest {
     @Override
     @Ignore
     public void test03_importGroupMappings() {
+    }
+
+    // Leaving a purely local, non-LDAP-managed group requires a writable local user, which
+    // doesn't exist in no-import mode (joinGroup/leaveGroup on it would throw ReadOnlyException).
+    @Test
+    @Override
+    @Ignore
+    public void test10a_leaveOutOfPathGroupDoesNotAffectSameNameLdapManagedGroupInLdapOnlyMode() {
+    }
+
+    @Test
+    @Override
+    @Ignore
+    public void test10b_leaveOutOfPathGroupDoesNotAffectSameNameLdapManagedGroupInReadOnlyMode() {
     }
 
 }

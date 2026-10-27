@@ -24,6 +24,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
+import org.keycloak.Config;
+import org.keycloak.cluster.ClusterProvider;
+import org.keycloak.cluster.ClusterProviderFactory;
+import org.keycloak.common.Profile;
+import org.keycloak.common.util.Time;
+import org.keycloak.connections.infinispan.DefaultInfinispanConnectionProviderFactory;
+import org.keycloak.connections.infinispan.InfinispanConnectionProvider;
+import org.keycloak.infinispan.util.InfinispanUtils;
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.KeycloakSessionFactory;
+import org.keycloak.provider.EnvironmentDependentProviderFactory;
+
 import org.infinispan.Cache;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.context.Flag;
@@ -35,19 +47,9 @@ import org.infinispan.notifications.cachemanagerlistener.event.MergeEvent;
 import org.infinispan.notifications.cachemanagerlistener.event.ViewChangedEvent;
 import org.infinispan.remoting.transport.Address;
 import org.jboss.logging.Logger;
-import org.keycloak.Config;
-import org.keycloak.cluster.ClusterProvider;
-import org.keycloak.cluster.ClusterProviderFactory;
-import org.keycloak.common.Profile;
-import org.keycloak.common.util.Time;
-import org.keycloak.connections.infinispan.DefaultInfinispanConnectionProviderFactory;
-import org.keycloak.connections.infinispan.InfinispanConnectionProvider;
-import org.keycloak.connections.infinispan.InfinispanUtil;
-import org.keycloak.connections.infinispan.TopologyInfo;
-import org.keycloak.infinispan.util.InfinispanUtils;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.KeycloakSessionFactory;
-import org.keycloak.provider.EnvironmentDependentProviderFactory;
+
+import static org.keycloak.connections.infinispan.InfinispanConnectionProvider.LOCAL_CACHE_NAMES;
+import static org.keycloak.connections.infinispan.InfinispanConnectionProvider.WORK_CACHE_NAME;
 
 /**
  * This impl is aware of Cross-Data-Center scenario too
@@ -56,12 +58,14 @@ import org.keycloak.provider.EnvironmentDependentProviderFactory;
  */
 public class InfinispanClusterProviderFactory implements ClusterProviderFactory, EnvironmentDependentProviderFactory {
 
+    public static final String CLEAR_ALL_LOCAL_CACHES_EVENT = "CLEAR_ALL_LOCAL_CACHES_EVENT";
+
     protected static final Logger logger = Logger.getLogger(InfinispanClusterProviderFactory.class);
 
     private volatile Cache<String, Object> workCache;
     private volatile ClusterProvider clusterProvider;
 
-    private final ExecutorService localExecutor = Executors.newCachedThreadPool(r -> {
+    protected final ExecutorService localExecutor = Executors.newCachedThreadPool(r -> {
         Thread thread = Executors.defaultThreadFactory().newThread(r);
         thread.setName(this.getClass().getName() + "-" + thread.getName());
         return thread;
@@ -82,18 +86,25 @@ public class InfinispanClusterProviderFactory implements ClusterProviderFactory,
             if (clusterProvider != null)
                 return clusterProvider;
             InfinispanConnectionProvider ispnConnections = session.getProvider(InfinispanConnectionProvider.class);
-            this.workCache = ispnConnections.getCache(InfinispanConnectionProvider.WORK_CACHE_NAME);
+            this.workCache = ispnConnections.getCache(WORK_CACHE_NAME);
 
             workCacheListener = new ViewChangeListener();
             workCache.getCacheManager().addListener(workCacheListener);
 
             var clusterStartupTime = initClusterStartupTime(session);
-            TopologyInfo topologyInfo = InfinispanUtil.getTopologyInfo(session);
-            var cp = new InfinispanClusterProvider(clusterStartupTime, topologyInfo, workCache, localExecutor);
+            var cp = new InfinispanClusterProvider(clusterStartupTime, ispnConnections.getNodeInfo(), workCache, localExecutor);
 
             // We need CacheEntryListener for communication within current DC
             workCache.addListener(cp.new CacheEntryListener());
             logger.debugf("Added listener for infinispan cache: %s", workCache.getName());
+
+            cp.registerListener(CLEAR_ALL_LOCAL_CACHES_EVENT, event -> localExecutor.execute(() ->
+                    Arrays.stream(LOCAL_CACHE_NAMES)
+                            .filter(workCache.getCacheManager()::cacheExists)
+                            .map(name -> workCache.getCacheManager().getCache(name))
+                            .filter(cache -> cache.getCacheConfiguration().clustering().cacheMode() == CacheMode.LOCAL)
+                            .forEach(Cache::clear)
+            ));
 
             this.clusterProvider = cp;
             return clusterProvider;
@@ -103,7 +114,9 @@ public class InfinispanClusterProviderFactory implements ClusterProviderFactory,
     protected int initClusterStartupTime(KeycloakSession session) {
         Integer existingClusterStartTime = (Integer) workCache.get(InfinispanClusterProvider.CLUSTER_STARTUP_TIME_KEY);
         if (existingClusterStartTime != null) {
-            logger.debugf("Loaded cluster startup time: %s", Time.toDate(existingClusterStartTime).toString());
+            if (logger.isDebugEnabled()) {
+                logger.debugf("Loaded cluster startup time: %s", Time.toDate(existingClusterStartTime).toString());
+            }
             return existingClusterStartTime;
         } else {
             // clusterStartTime not yet initialized. Let's try to put our startupTime
@@ -111,10 +124,14 @@ public class InfinispanClusterProviderFactory implements ClusterProviderFactory,
 
             existingClusterStartTime = (Integer) workCache.putIfAbsent(InfinispanClusterProvider.CLUSTER_STARTUP_TIME_KEY, serverStartTime);
             if (existingClusterStartTime == null) {
-                logger.debugf("Initialized cluster startup time to %s", Time.toDate(serverStartTime).toString());
+                if (logger.isDebugEnabled()) {
+                    logger.debugf("Initialized cluster startup time to %s", Time.toDate(serverStartTime).toString());
+                }
                 return serverStartTime;
             } else {
-                logger.debugf("Loaded cluster startup time: %s", Time.toDate(existingClusterStartTime).toString());
+                if (logger.isDebugEnabled()) {
+                    logger.debugf("Loaded cluster startup time: %s", Time.toDate(existingClusterStartTime).toString());
+                }
                 return existingClusterStartTime;
             }
         }
@@ -147,7 +164,8 @@ public class InfinispanClusterProviderFactory implements ClusterProviderFactory,
 
     @Override
     public boolean isSupported(Config.Scope config) {
-        return InfinispanUtils.isEmbeddedInfinispan();
+        return InfinispanUtils.isEmbeddedInfinispan() &&
+                !Profile.isFeatureEnabled(Profile.Feature.STATELESS);
     }
 
     @Listener

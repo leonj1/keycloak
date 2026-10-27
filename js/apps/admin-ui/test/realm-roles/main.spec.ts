@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import { fillRoleData } from "../clients/role";
-import adminClient from "../utils/AdminClient";
+import { fillRoleData } from "../clients/role.ts";
+import adminClient from "../utils/AdminClient.ts";
 import {
   assertAttribute,
   assertAttributeLength,
@@ -9,22 +9,18 @@ import {
   deleteAttribute,
   fillAttributeData,
   goToAttributesTab,
-} from "../utils/attributes";
-import {
-  assertRequiredFieldError,
-  clickCancelButton,
-  clickSaveButton,
-} from "../utils/form";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { confirmModal } from "../utils/modal";
+} from "../utils/attributes.ts";
+import { assertRequiredFieldError, clickSaveButton } from "../utils/form.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { confirmModal } from "../utils/modal.ts";
 import {
   pickRoleType,
   clickUnassign,
   confirmModalAssign,
   pickRole,
-} from "../utils/roles";
-import { goToRealm, goToRealmRoles } from "../utils/sidebar";
+} from "../utils/roles.ts";
+import { goToRealm, goToRealmRoles } from "../utils/sidebar.ts";
 import {
   assertEmptyTable,
   assertNoResults,
@@ -32,14 +28,14 @@ import {
   clickRowKebabItem,
   clickTableRowItem,
   searchItem,
-} from "../utils/table";
+} from "../utils/table.ts";
 import {
   assertUnassignDisabled,
   clickCreateRoleButton,
   goToAssociatedRolesTab,
-} from "./main";
+} from "./main.ts";
 
-test.describe("Realm roles test", () => {
+test.describe.serial("Realm roles test", () => {
   const realmName = `realm-roles-${uuid()}`;
   const prefix = "realm_role_crud";
   const searchPlaceHolder = "Search role by name";
@@ -60,7 +56,8 @@ test.describe("Realm roles test", () => {
 
     await fillRoleData(page, "admin");
     await clickSaveButton(page);
-    await clickCancelButton(page);
+    await assertNotificationMessage(page, "Role created");
+    await goToRealmRoles(page);
 
     await clickCreateRoleButton(page);
     await fillRoleData(page, "admin");
@@ -244,7 +241,25 @@ test.describe("Realm roles test", () => {
     await assertNotificationMessage(page, "Role mapping updated");
   });
 
-  test.describe("edit role details", () => {
+  test("should show no users in role when the lookup answers 404", async ({
+    page,
+  }) => {
+    const roleName = `${prefix}-users-in-role-${uuid()}`;
+    await adminClient.createRealmRole({ realm: realmName, name: roleName });
+    // As it does when the role is deleted meanwhile; the admin client returns null.
+    await page.route(`**/roles/${roleName}/users**`, (route) =>
+      route.fulfill({ status: 404, json: { error: "Could not find role" } }),
+    );
+    await page.reload();
+
+    await searchItem(page, searchPlaceHolder, roleName);
+    await clickTableRowItem(page, roleName);
+    await page.getByTestId("usersInRoleTab").click();
+
+    await expect(page.getByText("No direct users")).toBeVisible();
+  });
+
+  test.describe.serial("edit role details", () => {
     const editRoleName = "going to edit";
     const description = "some description";
     const updateDescription = "updated description";

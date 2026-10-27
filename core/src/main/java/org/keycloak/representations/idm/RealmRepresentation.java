@@ -17,14 +17,6 @@
 
 package org.keycloak.representations.idm;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
-import org.eclipse.microprofile.openapi.annotations.media.Schema;
-import org.jboss.logging.Logger;
-import org.keycloak.common.util.MultivaluedHashMap;
-import org.keycloak.util.JsonSerialization;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -32,6 +24,15 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import org.keycloak.common.util.MultivaluedHashMap;
+import org.keycloak.json.KeycloakJsonMapperFactory;
+import org.keycloak.json.RawJsonValue;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.jboss.logging.Logger;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -99,6 +100,7 @@ public class RealmRepresentation {
     protected Long quickLoginCheckMilliSeconds;
     protected Integer maxDeltaTimeSeconds;
     protected Integer failureFactor;
+    protected Integer maxSecondaryAuthFailures;
     //--- end brute force settings
 
     @Deprecated
@@ -137,6 +139,7 @@ public class RealmRepresentation {
     protected String webAuthnPolicyAttestationConveyancePreference;
     protected String webAuthnPolicyAuthenticatorAttachment;
     protected String webAuthnPolicyRequireResidentKey;
+    protected String webAuthnPolicyResidentKey;
     protected String webAuthnPolicyUserVerificationRequirement;
     protected Integer webAuthnPolicyCreateTimeout;
     protected Boolean webAuthnPolicyAvoidSameAuthenticatorRegister;
@@ -151,22 +154,24 @@ public class RealmRepresentation {
     protected String webAuthnPolicyPasswordlessAttestationConveyancePreference;
     protected String webAuthnPolicyPasswordlessAuthenticatorAttachment;
     protected String webAuthnPolicyPasswordlessRequireResidentKey;
+    protected String webAuthnPolicyPasswordlessResidentKey;
     protected String webAuthnPolicyPasswordlessUserVerificationRequirement;
     protected Integer webAuthnPolicyPasswordlessCreateTimeout;
     protected Boolean webAuthnPolicyPasswordlessAvoidSameAuthenticatorRegister;
     protected List<String> webAuthnPolicyPasswordlessAcceptableAaguids;
     protected List<String> webAuthnPolicyPasswordlessExtraOrigins;
     protected Boolean webAuthnPolicyPasswordlessPasskeysEnabled;
+    protected String webAuthnPolicyPasswordlessMediation;
 
     // Client Policies/Profiles
 
     @JsonProperty("clientProfiles")
     @Schema(implementation = ClientProfilesRepresentation.class)
-    protected JsonNode clientProfiles;
+    protected RawJsonValue clientProfiles;
 
     @JsonProperty("clientPolicies")
     @Schema(implementation = ClientPoliciesRepresentation.class)
-    protected JsonNode clientPolicies;
+    protected RawJsonValue clientPolicies;
 
     protected List<UserRepresentation> users;
     protected List<UserRepresentation> federatedUsers;
@@ -238,6 +243,8 @@ public class RealmRepresentation {
     protected List<OAuthClientRepresentation> oauthClients;
     @Deprecated
     protected List<ClientTemplateRepresentation> clientTemplates;
+
+    private Boolean scimApiEnabled;
 
     public String getId() {
         return id;
@@ -517,6 +524,7 @@ public class RealmRepresentation {
         this.oauth2DeviceCodeLifespan = oauth2DeviceCodeLifespan;
     }
 
+    @Schema(name = "oauth2DeviceCodeLifespan")
     public Integer getOAuth2DeviceCodeLifespan() {
         return oauth2DeviceCodeLifespan;
     }
@@ -525,6 +533,7 @@ public class RealmRepresentation {
         this.oauth2DevicePollingInterval = oauth2DevicePollingInterval;
     }
 
+    @Schema(name = "oauth2DevicePollingInterval")
     public Integer getOAuth2DevicePollingInterval() {
         return oauth2DevicePollingInterval;
     }
@@ -848,6 +857,14 @@ public class RealmRepresentation {
         this.failureFactor = failureFactor;
     }
 
+    public Integer getMaxSecondaryAuthFailures() {
+        return maxSecondaryAuthFailures;
+    }
+
+    public void setMaxSecondaryAuthFailures(Integer maxSecondaryAuthFailures) {
+        this.maxSecondaryAuthFailures = maxSecondaryAuthFailures;
+    }
+
     public Boolean isEventsEnabled() {
         return eventsEnabled;
     }
@@ -1125,12 +1142,28 @@ public class RealmRepresentation {
         this.webAuthnPolicyAuthenticatorAttachment = webAuthnPolicyAuthenticatorAttachment;
     }
 
+    /**
+     * @deprecated Use {@link #getWebAuthnPolicyResidentKey()} instead. Planned to be removed in the future.
+     */
+    @Deprecated
     public String getWebAuthnPolicyRequireResidentKey() {
         return webAuthnPolicyRequireResidentKey;
     }
 
+    /**
+     * @deprecated Use {@link #setWebAuthnPolicyResidentKey(String)} instead. Planned to be removed in the future.
+     */
+    @Deprecated
     public void setWebAuthnPolicyRequireResidentKey(String webAuthnPolicyRequireResidentKey) {
         this.webAuthnPolicyRequireResidentKey = webAuthnPolicyRequireResidentKey;
+    }
+
+    public String getWebAuthnPolicyResidentKey() {
+        return webAuthnPolicyResidentKey;
+    }
+
+    public void setWebAuthnPolicyResidentKey(String webAuthnPolicyResidentKey) {
+        this.webAuthnPolicyResidentKey = webAuthnPolicyResidentKey;
     }
 
     public String getWebAuthnPolicyUserVerificationRequirement() {
@@ -1216,12 +1249,28 @@ public class RealmRepresentation {
         this.webAuthnPolicyPasswordlessAuthenticatorAttachment = webAuthnPolicyPasswordlessAuthenticatorAttachment;
     }
 
+    /**
+     * @deprecated Use {@link #getWebAuthnPolicyPasswordlessResidentKey()} instead. Planned to be removed in the future.
+     */
+    @Deprecated
     public String getWebAuthnPolicyPasswordlessRequireResidentKey() {
         return webAuthnPolicyPasswordlessRequireResidentKey;
     }
 
+    /**
+     * @deprecated Use {@link #setWebAuthnPolicyPasswordlessResidentKey(String)} instead. Planned to be removed in the future.
+     */
+    @Deprecated
     public void setWebAuthnPolicyPasswordlessRequireResidentKey(String webAuthnPolicyPasswordlessRequireResidentKey) {
         this.webAuthnPolicyPasswordlessRequireResidentKey = webAuthnPolicyPasswordlessRequireResidentKey;
+    }
+
+    public String getWebAuthnPolicyPasswordlessResidentKey() {
+        return webAuthnPolicyPasswordlessResidentKey;
+    }
+
+    public void setWebAuthnPolicyPasswordlessResidentKey(String webAuthnPolicyPasswordlessResidentKey) {
+        this.webAuthnPolicyPasswordlessResidentKey = webAuthnPolicyPasswordlessResidentKey;
     }
 
     public String getWebAuthnPolicyPasswordlessUserVerificationRequirement() {
@@ -1272,13 +1321,21 @@ public class RealmRepresentation {
         this.webAuthnPolicyPasswordlessPasskeysEnabled = webAuthnPolicyPasswordlessPasskeysEnabled;
     }
 
+    public String getWebAuthnPolicyPasswordlessMediation() {
+        return webAuthnPolicyPasswordlessMediation;
+    }
+
+    public void setWebAuthnPolicyPasswordlessMediation(String webAuthnPolicyPasswordlessMediation) {
+        this.webAuthnPolicyPasswordlessMediation = webAuthnPolicyPasswordlessMediation;
+    }
+
     // Client Policies/Profiles
 
     @JsonIgnore
     public ClientProfilesRepresentation getParsedClientProfiles() {
         try {
             if (clientProfiles == null) return null;
-            return JsonSerialization.mapper.convertValue(clientProfiles, ClientProfilesRepresentation.class);
+            return KeycloakJsonMapperFactory.mapper().convertValue(clientProfiles, ClientProfilesRepresentation.class);
         } catch (IllegalArgumentException ioe) {
             logger.warnf("Failed to deserialize client profiles in the realm %s. Fallback to return empty profiles. Details: %s", realm, ioe.getMessage());
             return null;
@@ -1291,14 +1348,14 @@ public class RealmRepresentation {
             this.clientProfiles = null;
             return;
         }
-        this.clientProfiles = JsonSerialization.mapper.convertValue(clientProfiles, JsonNode.class);
+        this.clientProfiles = KeycloakJsonMapperFactory.mapper().convertValue(clientProfiles, RawJsonValue.class);
     }
 
     @JsonIgnore
     public ClientPoliciesRepresentation getParsedClientPolicies() {
         try {
             if (clientPolicies == null) return null;
-            return JsonSerialization.mapper.convertValue(clientPolicies, ClientPoliciesRepresentation.class);
+            return KeycloakJsonMapperFactory.mapper().convertValue(clientPolicies, ClientPoliciesRepresentation.class);
         } catch (IllegalArgumentException ioe) {
             logger.warnf("Failed to deserialize client policies in the realm %s. Fallback to return empty profiles. Details: %s", realm, ioe.getMessage());
             return null;
@@ -1311,7 +1368,7 @@ public class RealmRepresentation {
             this.clientPolicies = null;
             return;
         }
-        this.clientPolicies = JsonSerialization.mapper.convertValue(clientPolicies, JsonNode.class);
+        this.clientPolicies = KeycloakJsonMapperFactory.mapper().convertValue(clientPolicies, RawJsonValue.class);
     }
 
     public String getBrowserFlow() {
@@ -1496,6 +1553,14 @@ public class RealmRepresentation {
             organizations = new ArrayList<>();
         }
         organizations.add(org);
+    }
+
+    public void setScimApiEnabled(Boolean scimApiEnabled) {
+        this.scimApiEnabled = scimApiEnabled;
+    }
+
+    public Boolean isScimApiEnabled() {
+        return scimApiEnabled;
     }
 
     public enum BruteForceStrategy {

@@ -16,19 +16,23 @@
  */
 package org.keycloak.broker.oauth;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import java.io.IOException;
+
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+
 import org.keycloak.broker.oidc.AbstractOAuth2IdentityProvider;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
-import org.keycloak.broker.provider.util.SimpleHttp;
+import org.keycloak.http.simple.SimpleHttp;
+import org.keycloak.http.simple.SimpleHttpRequest;
+import org.keycloak.http.simple.SimpleHttpResponse;
 import org.keycloak.models.KeycloakSession;
 
-import java.io.IOException;
+import com.fasterxml.jackson.databind.JsonNode;
 
 public class OAuth2IdentityProvider extends AbstractOAuth2IdentityProvider<OAuth2IdentityProviderConfig> {
 
@@ -91,10 +95,11 @@ public class OAuth2IdentityProvider extends AbstractOAuth2IdentityProvider<OAuth
         return identity;
     }
 
+
     private JsonNode fetchUserProfile(String accessToken) {
         String userInfoUrl = getConfig().getUserInfoUrl();
 
-        try (SimpleHttp.Response response = executeRequest(userInfoUrl, SimpleHttp.doGet(userInfoUrl, session)
+        try (SimpleHttpResponse response = executeRequest(userInfoUrl, SimpleHttp.create(session).doGet(userInfoUrl)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
                 .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON))) {
             String contentType = response.getFirstHeader(HttpHeaders.CONTENT_TYPE);
@@ -120,15 +125,24 @@ public class OAuth2IdentityProvider extends AbstractOAuth2IdentityProvider<OAuth
         }
     }
 
-    private SimpleHttp.Response executeRequest(String url, SimpleHttp request) throws IOException {
-        SimpleHttp.Response response = request.asResponse();
-        int status = response.getStatus();
-
-        if (Response.Status.fromStatusCode(status).getFamily() != Response.Status.Family.SUCCESSFUL) {
-            logger.warnf("User profile endpoint (%s) returned an error (%d): %s", url, status, response.asString());
-            throw new RuntimeException("Unexpected response from user profile endpoint");
+    private SimpleHttpResponse executeRequest(String url, SimpleHttpRequest request) throws IOException {
+        SimpleHttpResponse response = request.asResponse();
+        try {
+            int status = response.getStatus();
+            if (Response.Status.fromStatusCode(status).getFamily() != Response.Status.Family.SUCCESSFUL) {
+                logger.warnf("User profile endpoint (%s) returned an error (%d): %s", url, status, response.asString());
+                throw new RuntimeException("Unexpected response from user profile endpoint");
+            }
+            return response;
+        } catch (Exception e) {
+            // On exception, the caller never receives the response and can't close it, so we must close it here.
+            // Catching Exception (not IOException) is intentional — compiles via Java 7+ improved rethrow (JLS §11.2.2).
+            try {
+                response.close();
+            } catch (Exception closeException) {
+                e.addSuppressed(closeException);
+            }
+            throw e;
         }
-
-        return  response;
     }
 }

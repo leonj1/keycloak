@@ -1,6 +1,8 @@
-import { Page, expect } from "@playwright/test";
+import { type Page, expect } from "@playwright/test";
+import { selectItem } from "../utils/form.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { SERVER_URL } from "../utils/constants.ts";
 
-const SERVER_URL = "http://localhost:8080";
 const discoveryUrl = `${SERVER_URL}/realms/master/.well-known/openid-configuration`;
 const authorizationUrl = `${SERVER_URL}/realms/master/protocol/openid-connect/auth`;
 
@@ -43,6 +45,84 @@ export async function createSAMLProvider(
   await clickAddButton(page);
 }
 
+export async function createSPIFFEProvider(
+  page: Page,
+  providerName: string,
+  trustDomain: string,
+  bundleEndpoint: string,
+) {
+  await clickProviderCard(page, providerName);
+  await page.getByTestId("config.trustDomain").fill(trustDomain);
+  await page.getByTestId("config.bundleEndpoint").fill(bundleEndpoint);
+  await clickAddButton(page);
+}
+
+export async function createJwtAuthorizationGrantProvider(
+  page: Page,
+  providerName: string,
+  issuer: string,
+  jwksUrl: string,
+) {
+  await clickProviderCard(page, providerName);
+  await expect(page.getByTestId("config.useJwksUrl")).toBeChecked();
+  await page.getByTestId("config.issuer").fill(issuer);
+  await page.getByTestId("config.jwksUrl").fill(jwksUrl);
+  await clickAddButton(page);
+}
+
+export async function createJwtAuthorizationGrantProviderKey(
+  page: Page,
+  providerName: string,
+  issuer: string,
+  keyId: string,
+  key: string,
+) {
+  await clickProviderCard(page, providerName);
+  await page.getByTestId("config.issuer").fill(issuer);
+  await expect(page.getByTestId("config.useJwksUrl")).toBeChecked();
+  await page.getByTestId("config.useJwksUrl").click({ force: true });
+  await expect(
+    page.getByTestId("config.publicKeySignatureVerifierKeyId"),
+  ).toBeVisible();
+  await page.getByTestId("config.publicKeySignatureVerifierKeyId").fill(keyId);
+  await page.getByTestId("config.publicKeySignatureVerifier").fill(key);
+  await clickAddButton(page);
+}
+
+export async function createDefaultTrustProvider(
+  page: Page,
+  alias: string,
+  jwksUrl: string,
+) {
+  const realm =
+    (await page.getByTestId("currentRealm").textContent()) ?? "master";
+
+  await page.goto(
+    `${SERVER_URL}/admin/master/console/#/${realm}/identity-providers/default-trust/add`,
+  );
+
+  await page.getByTestId("alias").fill(alias);
+  await expect(page.getByTestId("config.useJwksUrl")).toBeChecked();
+  await page.getByTestId("config.jwksUrl").fill(jwksUrl);
+  await clickAddButton(page);
+
+  await assertNotificationMessage(
+    page,
+    "Identity provider successfully created",
+  );
+}
+
+export async function createKubernetesProvider(
+  page: Page,
+  providerName: string,
+  issuerUrl: string,
+) {
+  await clickProviderCard(page, providerName);
+  await expect(page.getByTestId("config.issuer")).toBeEnabled();
+  await page.getByTestId("config.issuer").fill(issuerUrl);
+  await clickAddButton(page);
+}
+
 export async function assertAuthorizationUrl(page: Page) {
   await expect(page.getByTestId("config.authorizationUrl")).toHaveValue(
     authorizationUrl,
@@ -52,6 +132,7 @@ export async function assertAuthorizationUrl(page: Page) {
 type UrlType =
   | "authorization"
   | "token"
+  | "tokenIntrospection"
   | "singleSignOnService"
   | "singleLogoutService";
 
@@ -59,12 +140,20 @@ export async function setUrl(page: Page, urlType: UrlType, value: string) {
   await page.getByTestId(`config.${urlType}Url`).fill(value);
 }
 
+export async function reenterClientSecret(page: Page, secret: string) {
+  const field = page.getByTestId("config.clientSecret");
+  await expect(field).toHaveValue("");
+  await field.fill(secret);
+  await expect(field).toHaveValue(secret);
+}
+
 export async function assertInvalidUrlNotification(
   page: Page,
   urlType: UrlType,
 ) {
-  await expect(page.getByTestId("last-alert")).toHaveText(
-    `Could not update the provider The url [${urlType}${urlType.startsWith("single") ? "U" : "_u"}rl] is malformed`,
+  await assertNotificationMessage(
+    page,
+    `Could not update the provider. The url [${urlType}${urlType.startsWith("single") ? "U" : "_u"}rl] is malformed`,
   );
 }
 
@@ -89,14 +178,14 @@ async function assertElementExists(
 }
 
 export async function assertJwksUrlExists(page: Page, exist: boolean = true) {
-  assertElementExists(page, "[data-testid='config.jwksUrl']", exist);
+  await assertElementExists(page, "[data-testid='config.jwksUrl']", exist);
 }
 
 export async function assertPkceMethodExists(
   page: Page,
   exist: boolean = true,
 ) {
-  assertElementExists(page, "#config\\.pkceMethod", exist);
+  await assertElementExists(page, "#config\\.pkceMethod", exist);
 }
 
 export async function goToMappersTab(page: Page) {
@@ -109,13 +198,37 @@ export async function addMapper(
   mapperName: string,
 ) {
   await page.getByTestId("no-mappers-empty-action").click();
-  await page.locator("#identityProviderMapper").click();
-  await page.getByTestId(`${mapperType}-idp-mapper`).click();
-  await page.getByTestId("name").fill(mapperName);
+  await selectItem(
+    page,
+    "#identityProviderMapper",
+    page.getByTestId(`${mapperType}-idp-mapper`),
+  );
+  const name = page.getByTestId("name");
+  // Fields that load their options asynchronously take the focus when they appear, which can swallow the text.
+  await expect(async () => {
+    await name.fill(mapperName);
+    await expect(name).toHaveValue(mapperName, { timeout: 1_000 });
+  }).toPass();
 }
 
 export async function clickSaveMapper(page: Page) {
-  await page.getByTestId("new-mapper-save-button").click();
+  const saveMapperButton = page.getByTestId("new-mapper-save-button");
+  await expect(saveMapperButton).toBeEnabled();
+  await saveMapperButton.click();
+  // The add-mapper page is itself /mappers/create, so wait until the save has
+  // navigated away from it before deciding where we are.
+  await expect(page).not.toHaveURL(/\/mappers\/create$/);
+  await expect(page).toHaveURL(/.*mappers(\/[^/]+)?$/);
+
+  // Some mapper forms stay on /mappers/:id after save. Navigate back to the list
+  // so callers can assert the mapper row in a single place.
+  if (/\/mappers\/[^/]+$/.test(page.url())) {
+    const cancelMapperButton = page.getByTestId("new-mapper-cancel-button");
+    if ((await cancelMapperButton.count()) > 0) {
+      await cancelMapperButton.first().click();
+      await expect(page).toHaveURL(/.*mappers$/);
+    }
+  }
 }
 
 export async function clickCancelMapper(page: Page) {

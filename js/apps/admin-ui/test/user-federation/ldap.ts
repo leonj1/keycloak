@@ -1,6 +1,6 @@
-import ComponentRepresentation from "@keycloak/keycloak-admin-client/lib/defs/componentRepresentation";
-import { Page, expect } from "@playwright/test";
-import { selectItem } from "../utils/form";
+import type ComponentRepresentation from "@keycloak/keycloak-admin-client/lib/defs/componentRepresentation.js";
+import { type Page, expect } from "@playwright/test";
+import { selectItem } from "../utils/form.ts";
 
 const filteredConfig = ["vendor", "bindType", "useTruststoreSpi", "editMode"];
 export async function fillLdapForm(page: Page, ldap: ComponentRepresentation) {
@@ -37,8 +37,7 @@ export async function fillLdapForm(page: Page, ldap: ComponentRepresentation) {
 }
 
 export async function selectEvictionPolicy(page: Page, policy: string) {
-  await page.locator("#kc-cache-policy").click();
-  await page.getByRole("option", { name: policy }).click();
+  await selectItem(page, "#kc-cache-policy", policy);
 }
 
 export async function fillEviction(page: Page, evict: [string, string]) {

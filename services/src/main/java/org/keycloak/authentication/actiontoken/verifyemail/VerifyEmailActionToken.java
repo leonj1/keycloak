@@ -16,8 +16,9 @@
  */
 package org.keycloak.authentication.actiontoken.verifyemail;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import org.keycloak.authentication.actiontoken.DefaultActionToken;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Representation of a token that represents a time-limited verify e-mail action.
@@ -27,6 +28,9 @@ import org.keycloak.authentication.actiontoken.DefaultActionToken;
 public class VerifyEmailActionToken extends DefaultActionToken {
 
     public static final String TOKEN_TYPE = "verify-email";
+
+    // Signed proof key for verification requested during organization broker onboarding.
+    public static final String ORGANIZATION_EMAIL_VERIFICATION = "org_email_verification";
 
     private static final String JSON_FIELD_ORIGINAL_AUTHENTICATION_SESSION_ID = "oasid";
     private static final String JSON_FIELD_REDIRECT_URI = "reduri";

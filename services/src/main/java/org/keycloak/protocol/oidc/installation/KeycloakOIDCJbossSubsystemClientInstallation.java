@@ -17,6 +17,12 @@
 
 package org.keycloak.protocol.oidc.installation;
 
+import java.net.URI;
+import java.util.Map;
+
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
 import org.keycloak.Config;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
@@ -25,18 +31,13 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.ClientInstallationProvider;
 import org.keycloak.protocol.oidc.OIDCLoginProtocol;
 
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import java.net.URI;
-import java.util.Map;
-
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
  * @version $Revision: 1 $
  */
 public class KeycloakOIDCJbossSubsystemClientInstallation implements ClientInstallationProvider {
     @Override
-    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI baseUri) {
+    public Response generateInstallation(KeycloakSession session, RealmModel realm, ClientModel client, URI baseUri, boolean includeSecrets) {
         StringBuffer buffer = new StringBuffer();
         buffer.append("<secure-deployment name=\"WAR MODULE NAME.war\">\n");
         buffer.append("    <realm>").append(realm.getName()).append("</realm>\n");
@@ -54,9 +55,8 @@ public class KeycloakOIDCJbossSubsystemClientInstallation implements ClientInsta
             buffer.append("    <verify-token-audience>true</verify-token-audience>\n");
         }
 
-        String cred = client.getSecret();
         if (KeycloakOIDCClientInstallation.showClientCredentialsAdapterConfig(client)) {
-            Map<String, Object> adapterConfig = KeycloakOIDCClientInstallation.getClientCredentialsAdapterConfig(session, client);
+            Map<String, Object> adapterConfig = KeycloakOIDCClientInstallation.getClientCredentialsAdapterConfig(session, client, includeSecrets);
             for (Map.Entry<String, Object> entry : adapterConfig.entrySet()) {
                 buffer.append("    <credential name=\"" + entry.getKey() + "\">");
 
@@ -135,4 +135,3 @@ public class KeycloakOIDCJbossSubsystemClientInstallation implements ClientInsta
         return MediaType.APPLICATION_XML;
     }
 }
-

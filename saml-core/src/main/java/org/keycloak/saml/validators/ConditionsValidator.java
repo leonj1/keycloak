@@ -16,13 +16,6 @@
  */
 package org.keycloak.saml.validators;
 
-import org.keycloak.dom.saml.common.CommonConditionsType;
-import org.keycloak.dom.saml.v2.assertion.AudienceRestrictionType;
-import org.keycloak.dom.saml.v2.assertion.ConditionAbstractType;
-import org.keycloak.dom.saml.v2.assertion.ConditionsType;
-import org.keycloak.dom.saml.v2.assertion.OneTimeUseType;
-import org.keycloak.dom.saml.v2.assertion.ProxyRestrictionType;
-import org.keycloak.saml.processing.core.saml.v2.util.XMLTimeUtil;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
@@ -31,6 +24,15 @@ import java.util.Iterator;
 import java.util.Set;
 import javax.xml.datatype.DatatypeConstants;
 import javax.xml.datatype.XMLGregorianCalendar;
+
+import org.keycloak.dom.saml.common.CommonConditionsType;
+import org.keycloak.dom.saml.v2.assertion.AudienceRestrictionType;
+import org.keycloak.dom.saml.v2.assertion.ConditionAbstractType;
+import org.keycloak.dom.saml.v2.assertion.ConditionsType;
+import org.keycloak.dom.saml.v2.assertion.OneTimeUseType;
+import org.keycloak.dom.saml.v2.assertion.ProxyRestrictionType;
+import org.keycloak.saml.processing.core.saml.v2.util.XMLTimeUtil;
+
 import org.jboss.logging.Logger;
 
 /**
@@ -54,6 +56,11 @@ public class ConditionsValidator {
         protected abstract Result joinResult(Result otherResult);
     };
 
+    public interface OneTimeUseHandler {
+
+        boolean validate(String assertionId);
+    }
+
     public static class Builder {
 
         private final String assertionId;
@@ -65,6 +72,8 @@ public class ConditionsValidator {
         private int clockSkewInMillis = 0;
 
         private final Set<URI> allowedAudiences = new HashSet<>();
+
+        private OneTimeUseHandler oneTimeUseHandler;
 
         public Builder(String assertionId, CommonConditionsType conditions, DestinationValidator destinationValidator) {
             this.assertionId = assertionId;
@@ -82,8 +91,13 @@ public class ConditionsValidator {
             return this;
         }
 
+        public Builder oneTimeUseHandler(OneTimeUseHandler oneTimeUseHandler) {
+            this.oneTimeUseHandler = oneTimeUseHandler;
+            return this;
+        }
+
         public ConditionsValidator build() {
-            return new ConditionsValidator(assertionId, conditions, clockSkewInMillis, allowedAudiences, destinationValidator);
+            return new ConditionsValidator(assertionId, conditions, clockSkewInMillis, allowedAudiences, destinationValidator, oneTimeUseHandler);
         }
 
     }
@@ -104,12 +118,15 @@ public class ConditionsValidator {
 
     private int proxyRestrictionsCount = 0;
 
-    private ConditionsValidator(String assertionId, CommonConditionsType conditions, int clockSkewInMillis, Set<URI> allowedAudiences, DestinationValidator destinationValidator) {
+    private final OneTimeUseHandler oneTimeUseHandler;
+
+    private ConditionsValidator(String assertionId, CommonConditionsType conditions, int clockSkewInMillis, Set<URI> allowedAudiences, DestinationValidator destinationValidator, OneTimeUseHandler oneTimeUseHandler) {
         this.assertionId = assertionId;
         this.conditions = conditions;
         this.clockSkewInMillis = clockSkewInMillis;
         this.allowedAudiences = allowedAudiences;
         this.destinationValidator = destinationValidator;
+        this.oneTimeUseHandler = oneTimeUseHandler;
     }
 
     public boolean isValid() {
@@ -162,13 +179,16 @@ public class ConditionsValidator {
     private Result validateExpiration() {
         XMLGregorianCalendar notBefore = conditions.getNotBefore();
         XMLGregorianCalendar notOnOrAfter = conditions.getNotOnOrAfter();
+        return validateExpiration(assertionId, notBefore, notOnOrAfter, now, clockSkewInMillis)? Result.VALID : Result.INVALID;
+    }
 
+    protected static boolean validateExpiration(String assertionId, XMLGregorianCalendar notBefore, XMLGregorianCalendar notOnOrAfter, XMLGregorianCalendar now, int clockSkewInMillis) {
         if (notBefore == null && notOnOrAfter == null) {
-            return Result.VALID;
+            return true;
         }
 
         if (notBefore != null && notOnOrAfter != null && notBefore.compare(notOnOrAfter) != DatatypeConstants.LESSER) {
-            return Result.INVALID;
+            return false;
         }
 
         XMLGregorianCalendar updatedNotBefore = XMLTimeUtil.subtract(notBefore, clockSkewInMillis);
@@ -181,7 +201,7 @@ public class ConditionsValidator {
             LOG.infof("Assertion %s expired.", assertionId);
         }
 
-        return valid ? Result.VALID : Result.INVALID;
+        return valid;
     }
 
     /**
@@ -212,6 +232,11 @@ public class ConditionsValidator {
 
         if (oneTimeConditionsCount > 1) {   // line 960
             LOG.info("Invalid conditions: Multiple <OneTimeUse/> conditions found.");
+            return Result.INVALID;
+        }
+
+        if (oneTimeUseHandler != null && !oneTimeUseHandler.validate(assertionId)) {
+            LOG.infof("Assertion %s with a <OneTimeUse/> condition was rejected as already used or too old.", assertionId);
             return Result.INVALID;
         }
 

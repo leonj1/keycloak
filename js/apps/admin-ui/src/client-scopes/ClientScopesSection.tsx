@@ -17,7 +17,7 @@ import { Link } from "react-router-dom";
 import { useAdminClient } from "../admin-client";
 import type { Row } from "../clients/scopes/ClientScopes";
 import { getProtocolName } from "../clients/utils";
-import { useAlerts } from "@keycloak/keycloak-ui-shared";
+import { getErrorMessage, useAlerts } from "@keycloak/keycloak-ui-shared";
 import {
   AllClientScopeType,
   AllClientScopes,
@@ -25,11 +25,14 @@ import {
   ClientScope,
   ClientScopeDefaultOptionalType,
   changeScope,
+  ParameterizedScopeLabel,
+  isParameterizedScope,
   removeScope,
 } from "../components/client-scope/ClientScopeTypes";
 import { useConfirmDialog } from "../components/confirm-dialog/ConfirmDialog";
 import { Action, KeycloakDataTable } from "@keycloak/keycloak-ui-shared";
 import { ViewHeader } from "../components/view-header/ViewHeader";
+import { useAccess } from "../context/access/Access";
 import { useRealm } from "../context/realm-context/RealmContext";
 import helpUrls from "../help-urls";
 import { emptyFormatter } from "../util";
@@ -56,12 +59,14 @@ const TypeSelector = (scope: TypeSelectorProps) => {
 
   const { t } = useTranslation();
   const { addAlert, addError } = useAlerts();
+  const { hasAccess } = useAccess();
 
   return (
     <CellDropdown
       clientScope={scope}
       type={scope.type}
       all
+      isDisabled={!hasAccess("manage-realm")}
       onSelect={async (value) => {
         try {
           await changeScope(adminClient, scope, value as AllClientScopeType);
@@ -75,15 +80,18 @@ const TypeSelector = (scope: TypeSelectorProps) => {
   );
 };
 
-const ClientScopeDetailLink = ({
-  id,
-  name,
-}: ClientScopeDefaultOptionalType) => {
+const ClientScopeDetailLink = (scope: ClientScopeDefaultOptionalType) => {
   const { realm } = useRealm();
   return (
-    <Link key={id} to={toClientScope({ realm, id: id!, tab: "settings" })}>
-      {name}
-    </Link>
+    <>
+      <Link
+        key={scope.id}
+        to={toClientScope({ realm, id: scope.id!, tab: "settings" })}
+      >
+        {scope.name}
+      </Link>{" "}
+      {isParameterizedScope(scope) && <ParameterizedScopeLabel />}
+    </>
   );
 };
 
@@ -166,11 +174,8 @@ export default function ClientScopesSection() {
           for (const scope of selectedScopes) {
             try {
               await removeScope(adminClient, scope);
-            } catch (error: any) {
-              console.warn(
-                "could not remove scope",
-                error.response?.data?.errorMessage || error,
-              );
+            } catch (error) {
+              console.warn("could not remove scope", getErrorMessage(error));
             }
             await adminClient.clientScopes.del({ id: scope.id! });
           }

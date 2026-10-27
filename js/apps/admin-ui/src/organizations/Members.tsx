@@ -1,33 +1,28 @@
+import OrganizationMemberRepresentation from "@keycloak/keycloak-admin-client/lib/defs/organizationMemberRepresentation";
 import UserRepresentation from "@keycloak/keycloak-admin-client/lib/defs/userRepresentation";
 import {
-  Button,
-  Dropdown,
-  DropdownItem,
-  DropdownList,
-  MenuToggle,
-  ToolbarItem,
-} from "@patternfly/react-core";
+  Action,
+  KeycloakDataTable,
+  ListEmptyState,
+  useAlerts,
+} from "@keycloak/keycloak-ui-shared";
+import { Button, ToolbarItem } from "@patternfly/react-core";
+import { cellWidth } from "@patternfly/react-table";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { useAdminClient } from "../admin-client";
-import { useAlerts } from "@keycloak/keycloak-ui-shared";
-import { ListEmptyState } from "@keycloak/keycloak-ui-shared";
-import { KeycloakDataTable } from "@keycloak/keycloak-ui-shared";
+import { CheckboxFilterComponent } from "../components/dynamic/CheckboxFilterComponent";
+import { SearchInputComponent } from "../components/dynamic/SearchInputComponent";
 import { useRealm } from "../context/realm-context/RealmContext";
 import { MemberModal } from "../groups/MembersModal";
 import { toUser } from "../user/routes/User";
 import { useParams } from "../utils/useParams";
 import useToggle from "../utils/useToggle";
-import { InviteMemberModal } from "./InviteMemberModal";
 import { EditOrganizationParams } from "./routes/EditOrganization";
-import { CheckboxFilterComponent } from "../components/dynamic/CheckboxFilterComponent";
-import { SearchInputComponent } from "../components/dynamic/SearchInputComponent";
-import { translationFormatter } from "../utils/translationFormatter";
-
-type MembershipTypeRepresentation = UserRepresentation & {
-  membershipType?: string;
-};
+import { MembershipTypeToggle } from "./MembershipTypeToggle";
+import { MembershipsModal } from "../groups/MembershipsModal";
+import { GroupResourceContext } from "../context/group-resource/GroupResourceContext";
 
 const UserDetailLink = (user: any) => {
   const { realm } = useRealm();
@@ -45,9 +40,7 @@ export const Members = () => {
   const { addAlert, addError } = useAlerts();
   const [key, setKey] = useState(0);
   const refresh = () => setKey(key + 1);
-  const [open, toggle] = useToggle();
   const [openAddMembers, toggleAddMembers] = useToggle();
-  const [openInviteMembers, toggleInviteMembers] = useToggle();
   const [selectedMembers, setSelectedMembers] = useState<UserRepresentation[]>(
     [],
   );
@@ -57,6 +50,8 @@ export const Members = () => {
     string[]
   >([]);
   const [isOpen, setIsOpen] = useState(false);
+  const [showMemberships, toggleShowMemberships] = useToggle();
+  const [selectedMember, setSelectedMember] = useState<UserRepresentation>();
 
   const membershipOptions = [
     { value: "Managed", label: "Managed" },
@@ -86,7 +81,7 @@ export const Members = () => {
           ? filteredMembershipTypes[0]
           : undefined;
 
-      const memberships: MembershipTypeRepresentation[] =
+      const memberships: OrganizationMemberRepresentation[] =
         await adminClient.organizations.listMembers({
           orgId,
           first,
@@ -146,7 +141,7 @@ export const Members = () => {
                 selectedRows.map((user) =>
                   adminClient.organizations.addMember({
                     orgId,
-                    userId: user.id!,
+                    userId: `"${user.id!}"`,
                   }),
                 ),
               );
@@ -163,8 +158,16 @@ export const Members = () => {
           }}
         />
       )}
-      {openInviteMembers && (
-        <InviteMemberModal orgId={orgId} onClose={toggleInviteMembers} />
+      {showMemberships && (
+        <GroupResourceContext value={adminClient.organizations.groups(orgId)}>
+          <MembershipsModal
+            onClose={() => {
+              toggleShowMemberships();
+            }}
+            user={selectedMember!}
+            orgId={orgId}
+          />
+        </GroupResourceContext>
       )}
       <KeycloakDataTable
         key={key}
@@ -186,39 +189,9 @@ export const Members = () => {
               />
             </ToolbarItem>
             <ToolbarItem>
-              <Dropdown
-                onOpenChange={toggle}
-                toggle={(ref) => (
-                  <MenuToggle
-                    ref={ref}
-                    onClick={toggle}
-                    isExpanded={open}
-                    variant="primary"
-                  >
-                    {t("addMember")}
-                  </MenuToggle>
-                )}
-                isOpen={open}
-              >
-                <DropdownList>
-                  <DropdownItem
-                    onClick={() => {
-                      toggleAddMembers();
-                      toggle();
-                    }}
-                  >
-                    {t("addRealmUser")}
-                  </DropdownItem>
-                  <DropdownItem
-                    onClick={() => {
-                      toggleInviteMembers();
-                      toggle();
-                    }}
-                  >
-                    {t("inviteMember")}
-                  </DropdownItem>
-                </DropdownList>
-              </Dropdown>
+              <Button variant="primary" onClick={toggleAddMembers}>
+                {t("addMember")}
+              </Button>
             </ToolbarItem>
             <ToolbarItem>
               <Button
@@ -250,6 +223,13 @@ export const Members = () => {
               await removeMember([member]);
             },
           },
+          {
+            title: t("showGroupMemberships"),
+            onRowClick: (member) => {
+              setSelectedMember(member);
+              toggleShowMemberships();
+            },
+          } as Action<UserRepresentation>,
         ]}
         columns={[
           {
@@ -267,7 +247,17 @@ export const Members = () => {
           },
           {
             name: "membershipType",
-            cellFormatters: [translationFormatter(t)],
+            // Fixed so the preceding columns do not shift when the switch
+            // label changes between "Managed" and "Unmanaged".
+            transforms: [cellWidth(20)],
+            cellRenderer: (member) => (
+              <MembershipTypeToggle
+                orgId={orgId}
+                userId={member.id!}
+                name={member.username}
+                isManaged={member.membershipType === "MANAGED"}
+              />
+            ),
           },
         ]}
         emptyState={
@@ -279,14 +269,12 @@ export const Members = () => {
                 text: t("addRealmUser"),
                 onClick: toggleAddMembers,
               },
-              {
-                text: t("inviteMember"),
-                onClick: toggleInviteMembers,
-              },
             ]}
           />
         }
-        isSearching={filteredMembershipTypes.length > 0}
+        isSearching={
+          filteredMembershipTypes.length > 0 || searchTriggerText.length > 0
+        }
       />
     </>
   );

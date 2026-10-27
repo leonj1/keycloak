@@ -1,20 +1,5 @@
 package org.keycloak.guides.maven;
 
-import static org.keycloak.quarkus.runtime.configuration.Configuration.OPTION_PART_SEPARATOR;
-import static org.keycloak.quarkus.runtime.configuration.Configuration.toDashCase;
-import static org.keycloak.quarkus.runtime.configuration.MicroProfileConfigProvider.NS_KEYCLOAK_PREFIX;
-
-import org.keycloak.config.ConfigSupportLevel;
-import org.keycloak.config.DeprecatedMetadata;
-import org.keycloak.config.OptionCategory;
-import org.keycloak.provider.ProviderConfigProperty;
-import org.keycloak.provider.ProviderFactory;
-import org.keycloak.provider.ProviderManager;
-import org.keycloak.provider.Spi;
-import org.keycloak.quarkus.runtime.Providers;
-import org.keycloak.quarkus.runtime.configuration.mappers.PropertyMappers;
-import org.keycloak.utils.StringUtil;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -28,8 +13,25 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
+
+import org.keycloak.config.ConfigSupportLevel;
+import org.keycloak.config.DeprecatedMetadata;
+import org.keycloak.config.OptionCategory;
+import org.keycloak.provider.ProviderConfigProperty;
+import org.keycloak.provider.ProviderFactory;
+import org.keycloak.provider.ProviderManager;
+import org.keycloak.provider.Spi;
+import org.keycloak.quarkus.runtime.Providers;
+import org.keycloak.quarkus.runtime.configuration.mappers.PropertyMappers;
+import org.keycloak.utils.StringUtil;
+
+import static org.keycloak.quarkus.runtime.configuration.Configuration.OPTION_PART_SEPARATOR;
+import static org.keycloak.quarkus.runtime.configuration.Configuration.toDashCase;
+import static org.keycloak.quarkus.runtime.configuration.MicroProfileConfigProvider.NS_KEYCLOAK_PREFIX;
 
 public class Options {
 
@@ -38,19 +40,22 @@ public class Options {
 
     public Options() {
         this.options = new EnumMap<>(OptionCategory.class);
-        PropertyMappers.getMappers().stream()
+        var mappers = PropertyMappers.getMappers();
+        mappers.addAll(PropertyMappers.getWildcardMappers());
+        mappers.stream()
                 .filter(m -> !m.isHidden())
                 .filter(propertyMapper -> Objects.nonNull(propertyMapper.getDescription()))
                 .map(m -> new Option(m.getFrom(),
                         m.getCategory(),
                         m.isBuildTime(),
-                        null,
+                        m.getType().getSimpleName(),
                         m.getDescription(),
-                        m.getDefaultValue().map(Object::toString).orElse(null),
+                        m.getDefaultValue().orElse(null),
                         m.getExpectedValues(),
                         m.isStrictExpectedValues(),
                         m.getEnabledWhen().orElse(""),
-                        m.getDeprecatedMetadata().orElse(null)))
+                        m.getDeprecatedMetadata().orElse(null),
+                        m.getOption().getWildcardKey().orElse(null)))
                 .forEach(o -> options.computeIfAbsent(o.category, k -> new TreeSet<>(Comparator.comparing(Option::getKey))).add(o));
 
         ProviderManager providerManager = Providers.getProviderManager(Thread.currentThread().getContextClassLoader());
@@ -79,10 +84,11 @@ public class Options {
                         .map(m -> new Option(optionPrefix + toDashCase(m.getName()), OptionCategory.GENERAL, false,
                                 m.getType(),
                                 m.getHelpText(),
-                                m.getDefaultValue() == null ? null : m.getDefaultValue().toString(),
+                                m.getDefaultValue(),
                                 m.getOptions() == null ? Collections.emptyList() : m.getOptions(),
                                 true,
                                 "",
+                                null,
                                 null))
                         .sorted(Comparator.comparing(Option::getKey)).collect(Collectors.toList());
 
@@ -187,26 +193,30 @@ public class Options {
         private final String enabledWhen;
         private final DeprecatedMetadata deprecated;
 
+        private final String wildcardKey;
+
         public Option(String key,
                       OptionCategory category,
                       boolean build,
                       String type,
                       String description,
-                      String defaultValue,
+                      Object defaultValue,
                       Iterable<String> expectedValues,
                       boolean strictExpectedValues,
                       String enabledWhen,
-                      DeprecatedMetadata deprecatedMetadata) {
+                      DeprecatedMetadata deprecatedMetadata,
+                      String wildcardKey) {
             this.key = key;
             this.category = category;
             this.build = build;
             this.type = type;
             this.description = description;
-            this.defaultValue = defaultValue;
+            this.defaultValue = org.keycloak.config.Option.getDefaultValueString(defaultValue);
             this.expectedValues = StreamSupport.stream(expectedValues.spliterator(), false).collect(Collectors.toList());
             this.strictExpectedValues = strictExpectedValues;
             this.enabledWhen = enabledWhen;
             this.deprecated = deprecatedMetadata;
+            this.wildcardKey = wildcardKey;
         }
 
         public boolean isBuild() {
@@ -229,23 +239,23 @@ public class Options {
             return key.toUpperCase().replace('.', '_').replace('-', '_');
         }
 
+        private static final Pattern SENTENCE_BREAK = Pattern.compile("\\.\\s");
+
         public String getDescription() {
-            int i = description.indexOf('.');
-            if (i == -1) {
-                return description;
-            } else {
-                return description.substring(0, i + 1).trim();
+            Matcher m = SENTENCE_BREAK.matcher(description);
+            if (!m.find()) {
+                return description.trim();
             }
+            return description.substring(0, m.start() + 1).trim();
         }
 
         public String getDescriptionExtended() {
-            int i = description.indexOf('.');
-            if (i == -1) {
+            Matcher m = SENTENCE_BREAK.matcher(description);
+            if (!m.find()) {
                 return null;
-            } else {
-                String extended = description.substring(i + 1).trim();
-                return extended.length() > 0 ? extended : null;
             }
+            String extended = description.substring(m.end()).trim();
+            return !extended.isEmpty() ? extended : null;
         }
 
         public String getDefaultValue() {
@@ -269,6 +279,10 @@ public class Options {
 
         public DeprecatedMetadata getDeprecated() {
             return deprecated;
+        }
+
+        public String getWildcardKey() {
+            return wildcardKey;
         }
     }
 

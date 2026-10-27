@@ -17,13 +17,15 @@
 
 package org.keycloak.authentication;
 
-import org.keycloak.models.ClientModel;
-import org.keycloak.provider.ProviderConfigProperty;
-import org.keycloak.provider.ProviderFactory;
-
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import org.keycloak.models.ClientModel;
+import org.keycloak.models.Constants;
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.provider.ConfiguredPerClientProvider;
+import org.keycloak.provider.ProviderFactory;
+import org.keycloak.representations.idm.ClientRepresentation;
 
 /**
  * Factory for creating ClientAuthenticator instances.  This is a singleton and created when Keycloak boots.
@@ -34,7 +36,7 @@ import java.util.Set;
  *
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
  */
-public interface ClientAuthenticatorFactory extends ProviderFactory<ClientAuthenticator>, ConfigurableAuthenticatorFactory {
+public interface ClientAuthenticatorFactory extends ProviderFactory<ClientAuthenticator>, ConfigurableAuthenticatorFactory, ConfiguredPerClientProvider {
     ClientAuthenticator create();
 
     /**
@@ -46,20 +48,25 @@ public interface ClientAuthenticatorFactory extends ProviderFactory<ClientAuthen
     boolean isConfigurable();
 
     /**
-     * List of config properties for this client implementation. Those will be shown in admin console in clients credentials tab and can be configured per client.
-     * Applicable only if "isConfigurablePerClient" is true
-     *
-     * @return
-     */
-    List<ProviderConfigProperty> getConfigPropertiesPerClient();
-
-    /**
      * Get configuration, which needs to be used for adapter ( keycloak.json ) of particular client. Some implementations
      * may return just template and user needs to edit the values according to his environment (For example fill the location of keystore file)
+     * Sensitive entries must be declared by {@link #getAdapterConfigurationSecretKeys()}.
      *
      * @return
      */
-    Map<String, Object> getAdapterConfiguration(ClientModel client);
+    Map<String, Object> getAdapterConfiguration(KeycloakSession session, ClientModel client);
+
+    /**
+     * Declare all sensitive entries in the map returned by {@link #getAdapterConfiguration(KeycloakSession, ClientModel)}.
+     * Paths are slash-separated map keys with a leading slash, for example {@code /secret} or {@code /secret-jwt/secret}.
+     * Keys must be non-empty and cannot contain slashes. No escaping is supported.
+     * Only nested maps can be traversed; array traversal is not supported.
+     * Missing paths are permitted for optional configuration entries. An entry declared sensitive is masked in its
+     * entirety, including when its value is a map or collection. Non-sensitive template placeholders need not be declared.
+     *
+     * @return a non-null set of secret paths, or an empty set if the configuration contains no secrets
+     */
+    Set<String> getAdapterConfigurationSecretKeys();
 
     /**
      * Get authentication methods for the specified protocol
@@ -70,11 +77,44 @@ public interface ClientAuthenticatorFactory extends ProviderFactory<ClientAuthen
     Set<String> getProtocolAuthenticatorMethods(String loginProtocol);
 
     /**
+     * Get protocol authentication method, which is set on the specified client.
+     *
+     * @param client client whose authentication method will be returned
+     * @return Client authentication method as specified in the related protocol specification.
+     *         For example "client_secret_basic", "client_secret_post" or "private_key_jwt" might be used as returned values.
+     */
+    default String getProtocolAuthenticatorMethod(ClientRepresentation client) {
+        String loginProtocol = client.getProtocol() == null ? Constants.DEFAULT_PROTOCOL : client.getProtocol();
+        Set<String> protocolAuthMethods = getProtocolAuthenticatorMethods(loginProtocol);
+        return protocolAuthMethods == null || protocolAuthMethods.isEmpty() ? null : protocolAuthMethods.iterator().next();
+    }
+
+    /**
+     * Set specified client authentication method to the specified client
+     *
+     * @param client client to update
+     * @param protocolAuthMethod Client authentication method as specified in the related protocol specification.
+     *                           For example "client_secret_basic", "client_secret_post" or "private_key_jwt" might be used as values of this parameter.
+     */
+    default void setClientAuthenticationMethod(ClientRepresentation client, String protocolAuthMethod) {
+        client.setClientAuthenticatorType(getId());
+    }
+
+    /**
      * Is this authenticator supports client secret?
      *
      * @return if it supports secret
      */
     default boolean supportsSecret() {
+        return false;
+    }
+
+    /**
+     * Is this authenticator supports authentication with client assertion?
+     *
+     * @return if it supports authentication with client assertion
+     */
+    default boolean supportsClientAssertion() {
         return false;
     }
 }

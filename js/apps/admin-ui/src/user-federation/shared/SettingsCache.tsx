@@ -3,7 +3,6 @@ import {
   SelectControl,
   SelectControlOption,
 } from "@keycloak/keycloak-ui-shared";
-import { isEqual } from "lodash-es";
 import { UseFormReturn, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { FormAccess } from "../../components/form/FormAccess";
@@ -16,6 +15,21 @@ export type SettingsCacheProps = {
   unWrap?: boolean;
 };
 
+const getValue = (value: string | string[] | undefined) => {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+};
+
+// The LDAP and Kerberos screens load with `form.reset(component)` and keep the raw
+// ComponentRepresentation, so a config entry is an array. The custom provider screen loads with
+// `convertToFormValues`, which unwraps a single-element array, so the same entry is a plain
+// string. A field has to be addressed by the shape that is actually in the form: react-hook-form
+// resolves `config.maxLifespan[0]` against the string "50" as "5".
+export const cacheFieldName = (key: string, value: unknown) =>
+  Array.isArray(value) || value === undefined ? `${key}[0]` : key;
+
 const CacheFields = ({ form }: { form: UseFormReturn }) => {
   const { t } = useTranslation();
 
@@ -23,6 +37,25 @@ const CacheFields = ({ form }: { form: UseFormReturn }) => {
     control: form.control,
     name: "config.cachePolicy",
   });
+
+  const cachePolicy = getValue(cachePolicyType);
+
+  const evictionDayName = cacheFieldName(
+    "config.evictionDay",
+    useWatch({ control: form.control, name: "config.evictionDay" }),
+  );
+  const evictionHourName = cacheFieldName(
+    "config.evictionHour",
+    useWatch({ control: form.control, name: "config.evictionHour" }),
+  );
+  const evictionMinuteName = cacheFieldName(
+    "config.evictionMinute",
+    useWatch({ control: form.control, name: "config.evictionMinute" }),
+  );
+  const maxLifespanName = cacheFieldName(
+    "config.maxLifespan",
+    useWatch({ control: form.control, name: "config.maxLifespan" }),
+  );
 
   const hourOptions: SelectControlOption[] = [];
   let hourDisplay = "";
@@ -65,10 +98,10 @@ const CacheFields = ({ form }: { form: UseFormReturn }) => {
           "NO_CACHE",
         ]}
       />
-      {isEqual(cachePolicyType, ["EVICT_WEEKLY"]) ? (
+      {cachePolicy === "EVICT_WEEKLY" ? (
         <SelectControl
           id="kc-eviction-day"
-          name="config.evictionDay[0]"
+          name={evictionDayName}
           label={t("evictionDay")}
           labelIcon={t("evictionDayHelp")}
           controller={{
@@ -86,37 +119,36 @@ const CacheFields = ({ form }: { form: UseFormReturn }) => {
           ]}
         />
       ) : null}
-      {isEqual(cachePolicyType, ["EVICT_DAILY"]) ||
-      isEqual(cachePolicyType, ["EVICT_WEEKLY"]) ? (
+      {cachePolicy === "EVICT_DAILY" || cachePolicy === "EVICT_WEEKLY" ? (
         <>
           <SelectControl
             id="kc-eviction-hour"
-            name="config.evictionHour"
+            name={evictionHourName}
             label={t("evictionHour")}
             labelIcon={t("evictionHourHelp")}
             controller={{
-              defaultValue: ["0"],
+              defaultValue: "0",
             }}
             aria-label={t("selectEvictionHour")}
             options={hourOptions}
           />
           <SelectControl
             id="kc-eviction-minute"
-            name="config.evictionMinute"
+            name={evictionMinuteName}
             label={t("evictionMinute")}
             labelIcon={t("evictionMinuteHelp")}
             controller={{
-              defaultValue: ["0"],
+              defaultValue: "0",
             }}
             aria-label={t("selectEvictionMinute")}
             options={minuteOptions}
           />
         </>
       ) : null}
-      {isEqual(cachePolicyType, ["MAX_LIFESPAN"]) ? (
+      {cachePolicy === "MAX_LIFESPAN" ? (
         <NumberControl
           data-testid="kerberos-cache-lifespan"
-          name="config.maxLifespan[0]"
+          name={maxLifespanName}
           label={t("maxLifespan")}
           labelIcon={t("maxLifespanHelp")}
           unit={t("ms")}

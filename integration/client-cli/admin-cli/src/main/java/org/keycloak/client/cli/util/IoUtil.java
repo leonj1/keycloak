@@ -16,8 +16,6 @@
  */
 package org.keycloak.client.cli.util;
 
-import org.keycloak.common.util.StreamUtil;
-
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -39,6 +37,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Set;
+
+import org.keycloak.common.util.StreamUtil;
 
 import static java.nio.file.Files.createDirectories;
 import static java.nio.file.Files.createFile;
@@ -111,16 +111,17 @@ public class IoUtil {
                 warnErr("Failed to restrict access permissions on .keycloak directory: " + parent);
             }
         }
+
         if (!isRegularFile(path)) {
             createFile(path);
-            // make sure only owner can read/write it
-            if (FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
-                setUnixPermissions(path);
-            } else if (supportedViews.contains("acl")) {
-                setWindowsPermissions(path);
-            } else {
-                warnErr("Failed to restrict access permissions on config file: " + path);
-            }
+        }
+        // make sure only owner can read/write it
+        if (supportedViews.contains("posix")) {
+            setUnixPermissions(path);
+        } else if (supportedViews.contains("acl")) {
+            setWindowsPermissions(path);
+        } else {
+            warnErr("Failed to restrict access permissions on config file: " + path);
         }
     }
 

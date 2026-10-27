@@ -1,10 +1,11 @@
 package org.keycloak.crypto.fips.test;
 
+import org.keycloak.common.util.Environment;
+import org.keycloak.jose.JWETest;
+
 import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
-import org.keycloak.common.util.Environment;
-import org.keycloak.jose.JWETest;
 
 /**
  * Test with fips1402 security provider and bouncycastle-fips
@@ -33,5 +34,12 @@ public class FIPS1402JWETest extends JWETest {
     public void testRSA1_5_A128CBCHS256() throws Exception {
         Assume.assumeFalse("approved_only is set", Boolean.getBoolean("org.bouncycastle.fips.approved_only"));
         super.testRSA1_5_A128CBCHS256();
+    }
+
+    @Test
+    @Override
+    public void testRSA1_5_CekUnwrapFailureIsIndistinguishableFromAeadFailure() throws Exception {
+        Assume.assumeFalse("approved_only is set", Boolean.getBoolean("org.bouncycastle.fips.approved_only"));
+        super.testRSA1_5_CekUnwrapFailureIsIndistinguishableFromAeadFailure();
     }
 }

@@ -85,8 +85,22 @@ public interface Evaluation {
      */
     Policy getParentPolicy();
 
+    /**
+     * Returns the current effect, or {@code null} if no decision has been made.
+     * Only {@link Effect#PERMIT} grants access.
+     *
+     * @return the current effect
+     */
     Effect getEffect();
 
+    /**
+     * Sets the effect without applying the policy's positive or negative logic.
+     * Use {@link Effect#INVALID} when invalid configuration prevents evaluation,
+     * for example when a required client scope no longer exists. Aggregated policies
+     * must propagate this effect unchanged, regardless of their logic or decision strategy.
+     *
+     * @param effect the effect of this evaluation
+     */
     void setEffect(Effect effect);
 
     /**
@@ -101,7 +115,7 @@ public interface Evaluation {
     }
 
     /**
-     * If the given scope should not be granted when the given {@code deniedPolicy} denies access to a resource or a specific scope.
+     * If the given scope should not be granted when the given {@code deniedPolicy} is associated with a resource group.
      *
      * @param deniedPolicy the policy granting access
      * @param deniedScope the scope that should be granted

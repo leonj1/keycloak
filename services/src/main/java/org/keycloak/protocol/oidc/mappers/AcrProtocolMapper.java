@@ -23,13 +23,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.jboss.logging.Logger;
 import org.keycloak.Config;
+import org.keycloak.authentication.authenticators.util.AcrStore;
 import org.keycloak.authentication.authenticators.util.LoAUtil;
 import org.keycloak.common.Profile;
 import org.keycloak.models.AuthenticatedClientSessionModel;
 import org.keycloak.models.ClientSessionContext;
-import org.keycloak.models.Constants;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ProtocolMapperModel;
 import org.keycloak.models.UserSessionModel;
@@ -39,6 +38,8 @@ import org.keycloak.provider.EnvironmentDependentProviderFactory;
 import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.representations.IDToken;
 import org.keycloak.services.managers.AuthenticationManager;
+
+import org.jboss.logging.Logger;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -104,9 +105,7 @@ public class AcrProtocolMapper extends AbstractOIDCProtocolMapper implements OID
     protected String getAcr(AuthenticatedClientSessionModel clientSession) {
         int loa = LoAUtil.getCurrentLevelOfAuthentication(clientSession);
         logger.tracef("Loa level when authenticated to client %s: %d", clientSession.getClient().getClientId(), loa);
-        if (loa < Constants.MINIMUM_LOA) {
-            loa = AuthenticationManager.isSSOAuthentication(clientSession) ? 0 : 1;
-        }
+        loa = AcrStore.getEffectiveLevelOfAuthentication(loa, AuthenticationManager.isSSOAuthentication(clientSession));
 
         Map<String, Integer> acrLoaMap = AcrUtils.getAcrLoaMap(clientSession.getClient());
         String acr = AcrUtils.mapLoaToAcr(loa, acrLoaMap, AcrUtils.getRequiredAcrValues(

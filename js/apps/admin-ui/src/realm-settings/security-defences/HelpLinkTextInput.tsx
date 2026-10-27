@@ -1,5 +1,5 @@
 import { Trans, useTranslation } from "react-i18next";
-import { TextControl } from "@keycloak/keycloak-ui-shared";
+import { HelpItem, TextControl } from "@keycloak/keycloak-ui-shared";
 import { FormattedLink } from "../../components/external-link/FormattedLink";
 
 type HelpLinkTextInputProps = {
@@ -18,10 +18,19 @@ export const HelpLinkTextInput = ({
       name={fieldName}
       label={t(name)}
       labelIcon={
-        <Trans i18nKey={`${name}Help`}>
-          Default value prevents pages from being included
-          <FormattedLink href={url} title={t("learnMore")} />
-        </Trans>
+        <HelpItem
+          fieldLabelId={fieldName}
+          helpText={
+            <Trans
+              i18nKey={`${name}Help`}
+              components={{
+                formattedlink: (
+                  <FormattedLink href={url} title={t("learnMore")} />
+                ),
+              }}
+            />
+          }
+        />
       }
     />
   );

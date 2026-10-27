@@ -28,7 +28,13 @@ public interface Decision<D extends Evaluation> {
 
     enum Effect {
         PERMIT,
-        DENY
+        DENY,
+        /**
+         * The policy cannot be evaluated because its configuration is invalid.
+         * Unlike {@link #DENY}, this effect must not be inverted by negative logic.
+         * Aggregated policies propagate it unchanged; permission decision strategies count it as a denial.
+         */
+        INVALID
     }
 
     void onDecision(D evaluation);
@@ -41,5 +47,15 @@ public interface Decision<D extends Evaluation> {
     }
 
     default void onComplete(ResourcePermission permission) {
+    }
+
+    /**
+     * Checks if the given {@code scope} is associated with any policy processed in this decision.
+     *
+     * @param scope the scope name
+     * @return {@code true} if the scope is associated with a policy. Otherwise, {@code false}.
+     */
+    default boolean isEvaluated(String scope) {
+        return false;
     }
 }

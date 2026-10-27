@@ -1,21 +1,23 @@
 import { expect, test } from "@playwright/test";
 import { v4 as uuid } from "uuid";
-import adminClient from "../utils/AdminClient";
-import { assertFieldError, selectItem, switchOn } from "../utils/form";
-import { login } from "../utils/login";
-import { assertNotificationMessage } from "../utils/masthead";
-import { confirmModal } from "../utils/modal";
-import { goToRealm, goToRealmSettings, goToUsers } from "../utils/sidebar";
+import adminClient from "../utils/AdminClient.ts";
+import { assertFieldError, selectItem, switchOn } from "../utils/form.ts";
+import { login } from "../utils/login.ts";
+import { assertNotificationMessage } from "../utils/masthead.ts";
+import { confirmModal } from "../utils/modal.ts";
+import { goToRealm, goToRealmSettings, goToUsers } from "../utils/sidebar.ts";
 import {
   assertRowExists,
   clickRowKebabItem,
   clickTableRowItem,
-} from "../utils/table";
-import { goToLoginTab } from "./login";
+} from "../utils/table.ts";
+import { goToLoginTab } from "./login.ts";
 import {
   clickAddValidator,
   clickCancelAttribute,
+  clickCreateUser,
   clickCreateAttribute,
+  fillEmailAndOptionalUsername,
   clickSaveAttribute,
   clickSaveValidator,
   fillAttributeForm,
@@ -23,9 +25,9 @@ import {
   goToAttributesTab,
   goToUserProfileTab,
   switchOffIfOn,
-} from "./userprofile";
+} from "./userprofile.ts";
 
-test.describe("User profile tabs", () => {
+test.describe.serial("User profile tabs", () => {
   const name = "Test";
   const displayName = "Test display name";
   const modifyName = "ModifyTest";
@@ -60,19 +62,23 @@ test.describe("User profile tabs", () => {
 
   test.afterEach(async () => {
     await adminClient.deleteUser("testuser7", realmName, true);
+    await adminClient.deleteUser("testuser8", realmName, true);
+    await adminClient.deleteUser("testuser8@gmail.com", realmName, true);
     await adminClient.deleteUser("testuser9@gmail.com", realmName, true);
     await adminClient.deleteUser("testuser10", realmName, true);
     await adminClient.deleteUser("testuser11", realmName, true);
   });
 
-  test.describe("Attributes sub tab tests", () => {
+  test.describe.serial("Attributes sub tab tests", () => {
     test("Completes new attribute form and performs cancel", async ({
       page,
     }) => {
+      const uniqueName = "UniqueName";
       await clickCreateAttribute(page);
-      await fillAttributeForm(page, { name, displayName });
+      await fillAttributeForm(page, { name: uniqueName, displayName });
       await clickCancelAttribute(page);
-      await assertRowExists(page, name, false);
+      await assertRowExists(page, uniqueName, false);
+      await assertRowExists(page, "firstName", true);
     });
 
     test("Completes new attribute form and performs submit", async ({
@@ -120,6 +126,34 @@ test.describe("User profile tabs", () => {
         "No validators.",
       );
     });
+
+    test("Keeps realm overrides when deleting an attribute without a translation key", async ({
+      page,
+    }) => {
+      const attributeWithoutDisplayName = "NoTranslationKey";
+      await adminClient.addLocalizationText(
+        "en",
+        "loginAccountTitle",
+        "My Custom Login",
+        realmName,
+      );
+
+      await clickCreateAttribute(page);
+      await fillAttributeForm(page, { name: attributeWithoutDisplayName });
+      await clickSaveAttribute(page);
+      await assertNotificationMessage(
+        page,
+        "Success! User Profile configuration has been saved.",
+      );
+
+      await clickRowKebabItem(page, attributeWithoutDisplayName, "Delete");
+      await confirmModal(page);
+      await assertNotificationMessage(page, "Attribute deleted");
+
+      expect(await adminClient.getLocalizationTexts("en", realmName)).toEqual({
+        loginAccountTitle: "My Custom Login",
+      });
+    });
   });
 
   test("Deletes an attributes group", async ({ page }) => {
@@ -144,7 +178,7 @@ test.describe("User profile tabs", () => {
     await switchOn(page, "#kc-edit-username-switch");
 
     await goToUsers(page);
-    await page.getByTestId("no-users-found-empty-action").click();
+    await clickCreateUser(page);
     await expect(page.getByTestId(attrName)).toBeHidden();
     await page.getByTestId("username").fill("testuser7");
     await page.getByTestId("user-creation-save").click();
@@ -166,8 +200,12 @@ test.describe("User profile tabs", () => {
     await switchOn(page, "#kc-email-as-username-switch");
 
     await goToUsers(page);
-    await page.getByTestId("no-users-found-empty-action").click();
-    await page.getByTestId("email").fill("testuser8@gmail.com");
+    await clickCreateUser(page);
+    await fillEmailAndOptionalUsername(
+      page,
+      "testuser8@gmail.com",
+      "testuser8",
+    );
     await expect(page.getByTestId(attrName)).toBeHidden();
     await page.getByTestId("user-creation-save").click();
     await assertNotificationMessage(page, "The user has been created");
@@ -194,7 +232,7 @@ test.describe("User profile tabs", () => {
     await switchOffIfOn(page, "#kc-email-as-username-switch");
 
     await goToUsers(page);
-    await page.getByTestId("no-users-found-empty-action").click();
+    await clickCreateUser(page);
     await expect(page.getByTestId(attrName)).toBeVisible();
     await page.getByTestId("username").fill("testuser10");
     await page.getByTestId("user-creation-save").click();
@@ -219,7 +257,7 @@ test.describe("User profile tabs", () => {
     await clickSaveAttribute(page);
 
     await goToUsers(page);
-    await page.getByTestId("no-users-found-empty-action").click();
+    await clickCreateUser(page);
     await expect(page.getByTestId(attrName)).toBeVisible();
     await page.getByTestId("username").fill("testuser11");
     await page.getByTestId("user-creation-save").click();
@@ -253,7 +291,7 @@ test.describe("User profile tabs", () => {
     );
 
     await goToUsers(page);
-    await page.getByTestId("no-users-found-empty-action").click();
+    await clickCreateUser(page);
 
     await expect(page.getByRole("heading", { name: group })).toBeVisible();
   });

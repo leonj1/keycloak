@@ -16,11 +16,17 @@
  */
 package org.keycloak.services.managers;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonPropertyOrder;
-import org.jboss.logging.Logger;
-import org.keycloak.authentication.ClientAuthenticator;
-import org.keycloak.authentication.ClientAuthenticatorFactory;
+import java.net.URI;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+
+import org.keycloak.Config;
 import org.keycloak.common.Profile;
 import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.common.util.Time;
@@ -43,14 +49,9 @@ import org.keycloak.representations.adapters.config.PolicyEnforcerConfig;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.sessions.AuthenticationSessionProvider;
 
-import java.net.URI;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeSet;
-import java.util.stream.Collectors;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
+import org.jboss.logging.Logger;
 
 import static org.keycloak.models.Constants.defaultClients;
 
@@ -84,7 +85,9 @@ public class ClientManager {
 
         if (rep.getProtocol() != null) {
             LoginProtocolFactory providerFactory = (LoginProtocolFactory) session.getKeycloakSessionFactory().getProviderFactory(LoginProtocol.class, rep.getProtocol());
-            providerFactory.setupClientDefaults(rep, client);
+            if (providerFactory != null) {
+                providerFactory.setupClientDefaults(rep, client);
+            }
         }
 
 
@@ -228,6 +231,31 @@ public class ClientManager {
         }
     }
 
+    public Optional<UserModel> getServiceAccountUser(ClientModel client) {
+        UserModel user = realmManager.getSession().users().getServiceAccount(client);
+        if (user == null) {
+            if (client.isServiceAccountsEnabled()) {
+                enableServiceAccount(client);
+                user = realmManager.getSession().users().getServiceAccount(client);
+            }
+        }
+        return Optional.ofNullable(user);
+    }
+
+    public static void updateClientServiceAccount(KeycloakSession session, ClientModel client, Boolean isServiceAccountEnabled) {
+        UserModel serviceAccount = session.users().getServiceAccount(client);
+        boolean serviceAccountScopeAssigned = client.getClientScopes(true).containsKey(ServiceAccountConstants.SERVICE_ACCOUNT_SCOPE);
+        if (Boolean.TRUE.equals(isServiceAccountEnabled)) {
+            if (serviceAccount == null || !serviceAccountScopeAssigned) {
+                new ClientManager(new RealmManager(session)).enableServiceAccount(client);
+            }
+        } else if (Boolean.FALSE.equals(isServiceAccountEnabled) || !client.isServiceAccountsEnabled()) {
+            if (serviceAccount != null || serviceAccountScopeAssigned) {
+                new ClientManager(new RealmManager(session)).disableServiceAccount(client);
+            }
+        }
+    }
+
     @JsonPropertyOrder({"realm", "realm-public-key", "bearer-only", "auth-server-url", "ssl-required",
             "resource", "public-client", "verify-token-audience", "credentials",
             "use-resource-role-mappings"})
@@ -304,8 +332,8 @@ public class ClientManager {
         }
     }
 
-
-    public InstallationAdapterConfig toInstallationRepresentation(RealmModel realmModel, ClientModel clientModel, URI baseUri) {
+    public InstallationAdapterConfig toInstallationRepresentation(RealmModel realmModel, ClientModel clientModel, URI baseUri,
+            boolean includeSecrets) {
         InstallationAdapterConfig rep = new InstallationAdapterConfig();
         rep.setAuthServerUrl(baseUri.toString());
         rep.setRealm(realmModel.getName());
@@ -318,50 +346,12 @@ public class ClientManager {
         rep.setResource(clientModel.getClientId());
 
         if (showClientCredentialsAdapterConfig(clientModel)) {
-            Map<String, Object> adapterConfig = getClientCredentialsAdapterConfig(clientModel);
+            Map<String, Object> adapterConfig = ClientInstallationUtils.getClientCredentialsAdapterConfig(
+                    realmManager.getSession(), clientModel, includeSecrets);
             rep.setCredentials(adapterConfig);
         }
 
         return rep;
-    }
-
-    public String toJBossSubsystemConfig(RealmModel realmModel, ClientModel clientModel, URI baseUri) {
-        StringBuffer buffer = new StringBuffer();
-        buffer.append("<secure-deployment name=\"WAR MODULE NAME.war\">\n");
-        buffer.append("    <realm>").append(realmModel.getName()).append("</realm>\n");
-        buffer.append("    <auth-server-url>").append(baseUri.toString()).append("</auth-server-url>\n");
-        if (clientModel.isBearerOnly()){
-            buffer.append("    <bearer-only>true</bearer-only>\n");
-
-        } else if (clientModel.isPublicClient()) {
-            buffer.append("    <public-client>true</public-client>\n");
-        }
-        buffer.append("    <ssl-required>").append(realmModel.getSslRequired().name()).append("</ssl-required>\n");
-        buffer.append("    <resource>").append(clientModel.getClientId()).append("</resource>\n");
-        String cred = clientModel.getSecret();
-        if (showClientCredentialsAdapterConfig(clientModel)) {
-            Map<String, Object> adapterConfig = getClientCredentialsAdapterConfig(clientModel);
-            for (Map.Entry<String, Object> entry : adapterConfig.entrySet()) {
-                buffer.append("    <credential name=\"" + entry.getKey() + "\">");
-
-                Object value = entry.getValue();
-                if (value instanceof Map) {
-                    buffer.append("\n");
-                    Map<String, Object> asMap = (Map<String, Object>) value;
-                    for (Map.Entry<String, Object> credEntry : asMap.entrySet()) {
-                        buffer.append("        <" + credEntry.getKey() + ">" + credEntry.getValue().toString() + "</" + credEntry.getKey() + ">\n");
-                    }
-                    buffer.append("    </credential>\n");
-                } else {
-                    buffer.append(value.toString()).append("</credential>\n");
-                }
-            }
-        }
-        if (clientModel.getRolesStream().count() > 0) {
-            buffer.append("    <use-resource-role-mappings>true</use-resource-role-mappings>\n");
-        }
-        buffer.append("</secure-deployment>\n");
-        return buffer.toString();
     }
 
     private boolean showClientCredentialsAdapterConfig(ClientModel client) {
@@ -376,16 +366,10 @@ public class ClientManager {
         return true;
     }
 
-    private Map<String, Object> getClientCredentialsAdapterConfig(ClientModel client) {
-        String clientAuthenticator = client.getClientAuthenticatorType();
-        ClientAuthenticatorFactory authenticator = (ClientAuthenticatorFactory) realmManager.getSession().getKeycloakSessionFactory().getProviderFactory(ClientAuthenticator.class, clientAuthenticator);
-        return authenticator.getAdapterConfiguration(client);
-    }
-
     private boolean isInternalClient(String realmName, String clientId) {
         if (defaultClients.contains(clientId)) return true;
 
-        if (!"master".equals(realmName)) {
+        if (!Config.getAdminRealm().equals(realmName)) {
             return false;
         }
 
