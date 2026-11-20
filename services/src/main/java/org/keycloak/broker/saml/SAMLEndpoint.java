@@ -264,7 +264,11 @@ public class SAMLEndpoint {
         protected abstract String getBindingType();
         protected abstract boolean containsUnencryptedSignature(SAMLDocumentHolder documentHolder);
         protected abstract boolean isMessageFullySigned(SAMLDocumentHolder documentHolder);
-        protected abstract void verifySignature(String key, SAMLDocumentHolder documentHolder) throws VerificationException;
+        /**
+         * @param message the SAML message being processed, as received in the {@code key} parameter
+         * @param relayState the relay state being processed
+         */
+        protected abstract void verifySignature(String key, SAMLDocumentHolder documentHolder, String message, String relayState) throws VerificationException;
         protected abstract SAMLDocumentHolder extractRequestDocument(String samlRequest);
         protected abstract SAMLDocumentHolder extractResponseDocument(String response);
 
@@ -332,7 +336,7 @@ public class SAMLEndpoint {
             }
             if (config.isValidateSignature()) {
                 try {
-                    verifySignature(GeneralConstants.SAML_REQUEST_KEY, holder);
+                    verifySignature(GeneralConstants.SAML_REQUEST_KEY, holder, samlRequest, relayState);
                 } catch (VerificationException e) {
                     logger.error("validation failed", e);
                     event.event(EventType.IDENTITY_PROVIDER_RESPONSE);
@@ -459,7 +463,7 @@ public class SAMLEndpoint {
                 // validate the signature of the ArtifactResponse
                 if (config.isValidateSignature()) {
                     try {
-                        verifySignature(GeneralConstants.SAML_RESPONSE_KEY, samlDocumentHolder);
+                        verifySignature(GeneralConstants.SAML_RESPONSE_KEY, samlDocumentHolder, null, relayState);
                     } catch (VerificationException e) {
                         logger.error("artifact binding failed: the ArtifactResponse signature is invalid", e);
                         event.event(EventType.IDENTITY_PROVIDER_RESPONSE);
@@ -611,8 +615,12 @@ public class SAMLEndpoint {
 
                 // Validate InResponseTo attribute: must match the generated request ID
                 String expectedRequestId = authSession.getClientNote(SamlProtocol.SAML_REQUEST_ID_BROKER);
+                // The expected Recipient is derived locally from the client the login is actually targeting,
+                // rather than from the (optional, and not necessarily signed) Response Destination, so that
+                // an assertion issued for one broker client cannot be replayed against another.
+                String expectedRecipient = getExpectedDestination(config.getAlias(), clientId);
                 if (!validateInResponseToAttribute(responseType, expectedRequestId)
-                        || !validateSubjectConfirmationData(responseType, expectedRequestId)) {
+                        || !validateSubjectConfirmationData(responseType, expectedRequestId, expectedRecipient)) {
                     event.event(EventType.IDENTITY_PROVIDER_RESPONSE);
                     event.error(Errors.INVALID_SAML_RESPONSE);
                     return ErrorPage.error(session, authSession, Response.Status.BAD_REQUEST, Messages.INVALID_REQUESTER);
@@ -620,7 +628,7 @@ public class SAMLEndpoint {
 
                 boolean signed = AssertionUtil.isSignedElement(assertionElement);
                 final boolean assertionSignatureNotExistsWhenRequired = config.isWantAssertionsSigned() && !signed;
-                final boolean signatureNotValid = signed && config.isValidateSignature() && !AssertionUtil.isSignatureValid(assertionElement, getIDPKeyLocator());
+                final boolean signatureNotValid = signed && (config.isValidateSignature() || config.isWantAssertionsSigned()) && !AssertionUtil.isSignatureValid(assertionElement, getIDPKeyLocator());
                 final boolean hasNoSignatureWhenRequired = !signed && config.isValidateSignature() && !isMessageFullySigned(holder);
 
                 if (assertionSignatureNotExistsWhenRequired || signatureNotValid || hasNoSignatureWhenRequired) {
@@ -690,7 +698,8 @@ public class SAMLEndpoint {
 
                 ConditionsValidator.Builder cvb = new ConditionsValidator.Builder(assertion.getID(), assertion.getConditions(), destinationValidator)
                         .clockSkewInMillis(1000 * config.getAllowedClockSkew())
-                        .oneTimeUseHandler(assertionId -> registerOneTimeUse(assertion));
+                        .oneTimeUseHandler(assertionId -> registerOneTimeUse(assertion))
+                        .rejectProxyRestriction(config.isProxyRestrictionValidationEnabled());
                 try {
                     String issuerURL = getEntityId(session.getContext().getUri(), realm);
                     cvb.addAllowedAudience(URI.create(issuerURL));
@@ -814,7 +823,7 @@ public class SAMLEndpoint {
             }
             if (config.isValidateSignature()) {
                 try {
-                    verifySignature(GeneralConstants.SAML_RESPONSE_KEY, holder);
+                    verifySignature(GeneralConstants.SAML_RESPONSE_KEY, holder, samlResponse, relayState);
                 } catch (VerificationException e) {
                     logger.error("validation failed", e);
                     event.event(EventType.IDENTITY_PROVIDER_RESPONSE);
@@ -954,7 +963,7 @@ public class SAMLEndpoint {
         }
 
         @Override
-        protected void verifySignature(String key, SAMLDocumentHolder documentHolder) throws VerificationException {
+        protected void verifySignature(String key, SAMLDocumentHolder documentHolder, String message, String relayState) throws VerificationException {
             if ((! containsUnencryptedSignature(documentHolder)) && (documentHolder.getSamlObject() instanceof ResponseType)) {
                 ResponseType responseType = (ResponseType) documentHolder.getSamlObject();
                 List<ResponseType.RTChoiceType> assertions = responseType.getAssertions();
@@ -985,6 +994,23 @@ public class SAMLEndpoint {
 
     protected class RedirectBinding extends Binding {
         @Override
+        protected Response basicChecks(String samlRequest, String samlResponse, String samlArt) {
+            Response response = super.basicChecks(samlRequest, samlResponse, samlArt);
+            if (response != null) {
+                return response;
+            }
+            try {
+                SamlProtocolUtils.rejectRepeatedRedirectParameters(session.getContext().getUri().getQueryParameters(false));
+            } catch (VerificationException e) {
+                logger.debug("Invalid SAML redirect parameters", e);
+                event.event(EventType.IDENTITY_PROVIDER_RESPONSE);
+                event.error(Errors.INVALID_REQUEST);
+                return ErrorPage.error(session, null, Response.Status.BAD_REQUEST, Messages.INVALID_REQUEST);
+            }
+            return null;
+        }
+
+        @Override
         protected boolean containsUnencryptedSignature(SAMLDocumentHolder documentHolder) {
             MultivaluedMap<String, String> encodedParams = session.getContext().getUri().getQueryParameters(false);
             String algorithm = encodedParams.getFirst(GeneralConstants.SAML_SIG_ALG_REQUEST_KEY);
@@ -998,9 +1024,9 @@ public class SAMLEndpoint {
         }
 
         @Override
-        protected void verifySignature(String key, SAMLDocumentHolder documentHolder) throws VerificationException {
+        protected void verifySignature(String key, SAMLDocumentHolder documentHolder, String message, String relayState) throws VerificationException {
             KeyLocator locator = getIDPKeyLocator();
-            SamlProtocolUtils.verifyRedirectSignature(documentHolder, locator, session.getContext().getUri(), key);
+            SamlProtocolUtils.verifyRedirectSignature(documentHolder, locator, session.getContext().getUri(), key, message, relayState);
         }
 
         @Override
@@ -1045,7 +1071,7 @@ public class SAMLEndpoint {
         }
 
         @Override
-        protected void verifySignature(String key, SAMLDocumentHolder documentHolder) throws VerificationException {
+        protected void verifySignature(String key, SAMLDocumentHolder documentHolder, String message, String relayState) throws VerificationException {
             if (verified != null) {
                 // this is the second pass and signatures were already verified in the artifact response time
                 return;
@@ -1172,7 +1198,7 @@ public class SAMLEndpoint {
         return true;
     }
 
-    private boolean validateSubjectConfirmationData(ResponseType responseType, String expectedRequestId) {
+    private boolean validateSubjectConfirmationData(ResponseType responseType, String expectedRequestId, String expectedRecipient) {
         // Assertion > Subject > Confirmation (Bearer) > SubjectConfirmationData is mandatory and must always be
         // validated. Multiple Bearer confirmations are alternatives per the SAML 2.0 spec, so the assertion is
         // valid if any one of them passes validation.
@@ -1189,21 +1215,19 @@ public class SAMLEndpoint {
                         .collect(Collectors.toList());
 
         if (bearerConfirmations.isEmpty()) {
-            return isSubjectConfirmationDataValid(assertion, null, responseType, expectedRequestId);
+            return false;
         }
 
         return bearerConfirmations.stream().anyMatch(subjectConfirmationElement ->
-                isSubjectConfirmationDataValid(assertion, subjectConfirmationElement.getSubjectConfirmationData(), responseType, expectedRequestId));
+                isSubjectConfirmationDataValid(assertion, subjectConfirmationElement.getSubjectConfirmationData(), expectedRequestId, expectedRecipient));
     }
 
     private boolean isSubjectConfirmationDataValid(AssertionType assertion, SubjectConfirmationDataType subjectConfirmationDataElement,
-            ResponseType responseType, String expectedRequestId) {
+            String expectedRequestId, String expectedRecipient) {
         SubjectConfirmationDataValidator.Builder scdvb = new SubjectConfirmationDataValidator.Builder(assertion.getID(), subjectConfirmationDataElement, destinationValidator)
                 .inResponseTo(expectedRequestId)
-                .clockSkewInMillis(1000 * config.getAllowedClockSkew());
-        if (responseType.getDestination() != null) {
-            scdvb.allowedRecipient(responseType.getDestination());
-        }
+                .clockSkewInMillis(1000 * config.getAllowedClockSkew())
+                .allowedRecipient(expectedRecipient);
 
         return scdvb.build().isValid();
     }
