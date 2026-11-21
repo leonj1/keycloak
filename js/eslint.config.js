@@ -2,7 +2,6 @@
 import { fixupPluginRules } from "@eslint/compat";
 import { FlatCompat } from "@eslint/eslintrc";
 import eslint from "@eslint/js";
-import playwright from "eslint-plugin-playwright";
 import prettierRecommended from "eslint-plugin-prettier/recommended";
 import reactCompiler from "eslint-plugin-react-compiler";
 import reactHooks from "eslint-plugin-react-hooks";
@@ -23,7 +22,6 @@ export default tseslint.config(
       "**/target/",
       "**/.wireit/",
       "**/src/generated/doc-examples/",
-      "./apps/keycloak-server/server/",
     ],
   },
   eslint.configs.recommended,
@@ -139,8 +137,8 @@ export default tseslint.config(
     },
   },
   {
-    ...playwright.configs["flat/recommended"],
-    files: ["apps/account-ui/test/**", "apps/admin-ui/test/**"],
+    ...tseslint.configs.disableTypeChecked,
+    files: ["apps/admin-ui/scripts/*.mjs"],
   },
   {
     files: ["libs/keycloak-admin-client/test/**"],

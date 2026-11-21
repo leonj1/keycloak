@@ -201,12 +201,16 @@ export class Agent {
     headers?: [string, string][] | Record<string, string> | Headers;
   }) {
     const requestOptions = { ...this.#client.getRequestOptions() };
+    const token = await this.#client.getAccessToken();
     const requestHeaders = new Headers([
       ...new Headers(requestOptions.headers).entries(),
-      ["authorization", `Bearer ${await this.#client.getAccessToken()}`],
       ["accept", "application/json, text/plain, */*"],
       ...new Headers(headers).entries(),
     ]);
+
+    if (token && !new Headers(headers).has("authorization")) {
+      requestHeaders.set("authorization", `Bearer ${token}`);
+    }
 
     const searchParams: Record<string, string> = {};
 

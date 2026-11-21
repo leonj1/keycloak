@@ -11,7 +11,7 @@ corepack enable
 There are several reasons why PNPM is used over other package managers (such as NPM and Yarn):
 
 - The reasons mentioned in [pnpm vs npm](https://pnpm.io/pnpm-vs-npm), mostly it avoids [silly bugs](https://www.kochan.io/nodejs/pnpms-strictness-helps-to-avoid-silly-bugs.html).
-- Unlike [`npm ci`](https://docs.npmjs.com/cli/v9/commands/npm-ci) it preserves the `node_modules` directory between installs, allowing for faster install times (especially in Maven builds).
+- Unlike [`npm ci`](https://docs.npmjs.com/cli/v9/commands/npm-ci) it preserves the `node_modules` directory between installs, allowing for faster install times.
 - Unlike NPM it does not require workspace dependencies to be [explicitly versioned](https://pnpm.io/workspaces#publishing-workspace-packages), simplifying release versioning.
 
 If you submit a pull request that changes the dependencies, make sure that you also update the `pnpm-lock.yaml` as well.
@@ -20,21 +20,7 @@ Since this project relies greatly on [PNPM workspaces](https://pnpm.io/workspace
 
 ## Running
 
-We run the UI in dev mode and configure keycloak to proxy the request this can be done by adding `KC_ADMIN_VITE_URL=http://localhost:5174` as environment variable to the startup of keycloak or by using the start script:
-
-```bash
-pnpm --filter keycloak-server start --admin-dev
-```
-
-This script will download the nightly version of keycloak and start it with the added environment variable.
-Afterwards one needs to start the dev server with:
-
-```bash
-pnpm --filter keycloak-admin-ui run dev
-```
-
-Now when viewing the admin ui in the browser this is the local version and any changes made to the ui code base will automatically be reflected no reload needed.
-See [README.md](apps/keycloak-server/README.md) for more information.
+Follow the [standalone setup](../README.md#build-and-start).
 
 ## Code-style
 
@@ -53,13 +39,13 @@ To ensure code-style is consistent between various contributions [ESLint](https:
 
 For TypeScript code-style the recommendations of [`typescript-eslint`](https://typescript-eslint.io/) are adhered to as much as possible, specifically the [`strict-type-checked`](https://typescript-eslint.io/users/configs#strict-type-checked) and [`stylistic-type-checked`](https://typescript-eslint.io/users/configs#stylistic-type-checked) configurations.
 
-Deviations from, or additions to these rules should be documented by comments in the [ESLint configuration](.eslintrc.cjs).
+Deviations from, or additions to these rules should be documented by comments in the [ESLint configuration](eslint.config.js).
 
 ### Non-null assertion operator
 
 The [non-null assertion operator](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-2-0.html#non-null-assertion-operator) (`!`) is sometimes used to tell the TypeScript compiler that it is guaranteed that a value is not `null` or `undefined`. Because this might possibly introduce errors at run-time it should be used sparingly.
 
-The only place where it is valid to use the non-null assertion operator is on the types that are provided by the [Admin API client](https://github.com/keycloak/keycloak-nodejs-admin-client). The reason for this is that the types are generated from Java code, which does not explicitly provide information about the nullability of fields (more on that [here](https://github.com/keycloak/keycloak-nodejs-admin-client/issues/187)).
+The only place where it is valid to use the non-null assertion operator is on the types that are provided by the [Admin API client](https://github.com/keycloak/keycloak-nodejs-admin-client). Some API representations have optional fields whose presence depends on the endpoint.
 
 ## State management
 

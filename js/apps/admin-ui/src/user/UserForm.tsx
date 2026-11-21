@@ -244,7 +244,11 @@ export const UserForm = ({
               isRequired
             >
               <TextInput
-                value={formatDate(new Date(user.createdTimestamp!))}
+                value={
+                  user.createdTimestamp
+                    ? formatDate(new Date(user.createdTimestamp))
+                    : ""
+                }
                 id="kc-created-at"
                 readOnly
               />

@@ -8,6 +8,7 @@ import {
 import type Keycloak from "keycloak-js";
 import { PropsWithChildren, useEffect, useState } from "react";
 import type { Environment } from "./environment-types";
+import { configureRustAdminApi } from "./rust-admin-api";
 
 export type AdminClientProps = {
   keycloak: Keycloak;
@@ -40,6 +41,9 @@ export async function initAdminClient(
     },
   });
 
+  if (environment.administratorName !== undefined) {
+    configureRustAdminApi(adminClient);
+  }
   return adminClient;
 }
 

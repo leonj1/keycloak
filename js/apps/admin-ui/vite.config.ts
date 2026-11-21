@@ -1,87 +1,61 @@
 import react from "@vitejs/plugin-react-swc";
-import { readFileSync } from "node:fs";
-import path from "path";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { getProperties } from "properties-file";
-import { defineConfig, loadEnv } from "vite";
-import { checker } from "vite-plugin-checker";
+import { defineConfig } from "vitest/config";
 import dts from "vite-plugin-dts";
-import { configDefaults } from "vitest/config";
 
-// https://vitejs.dev/config/
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  const external = ["react", "react/jsx-runtime", "react-dom"];
-  const plugins = [
-    react(),
-    checker({ typescript: true }),
-    {
-      name: "message-bundle-transformer",
-      resolveId(source) {
-        if (source === "message-bundle") {
-          return source;
-        }
-        return null;
-      },
-      load(id) {
-        if (id === "message-bundle") {
-          let properties = {};
-          if (process.env.NODE_ENV === "development") {
-            properties = getProperties(
-              readFileSync(
-                "./maven-resources/theme/keycloak.v2/admin/messages/messages_en.properties",
-              ),
-            );
-          }
-          return {
-            code: `export default ${JSON.stringify(properties)};`,
-          };
-        }
-        return null;
-      },
-    },
-  ];
-  const input = env.LIB ? undefined : "src/main.tsx";
-  if (env.LIB) {
-    external.push("react-router-dom");
-    external.push("react-i18next");
-    plugins.push(dts({ insertTypesEntry: true }));
-  }
+export default defineConfig(() => {
+  const library = process.env.LIB === "true";
+  const messages = new URL("./messages/", import.meta.url);
 
-  const lib = env.LIB
-    ? {
-        outDir: "lib",
+  return {
+    plugins: [
+      react(),
+      library
+        ? dts({ insertTypesEntry: true })
+        : {
+            name: "admin-console-messages",
+            generateBundle() {
+              for (const file of readdirSync(messages)) {
+                const match = /^messages_([\w]+)\.properties$/.exec(file);
+                if (!match) continue;
+                const locale = match[1].replaceAll("_", "-");
+                const properties = getProperties(
+                  readFileSync(new URL(file, messages)),
+                );
+                this.emitFile({
+                  type: "asset",
+                  fileName: `messages/${locale}.json`,
+                  source: JSON.stringify(properties),
+                });
+              }
+            },
+          },
+    ],
+    build: {
+      target: "esnext",
+      ...(library && {
         lib: {
-          entry: path.resolve(__dirname, "src/index.ts"),
+          entry: fileURLToPath(new URL("./src/index.ts", import.meta.url)),
           formats: ["es"],
         },
-      }
-    : {
-        outDir: "target/classes/theme/keycloak.v2/admin/resources",
-        external: ["src/index.ts"],
-      };
-  return {
-    base: "",
-    server: {
-      origin: "http://localhost:5174",
-      port: 5174,
+        outDir: "lib",
+        rollupOptions: {
+          external: [
+            "react",
+            "react/jsx-runtime",
+            "react-dom",
+            "react-router-dom",
+            "react-i18next",
+          ],
+        },
+      }),
     },
-    build: {
-      ...lib,
-      sourcemap: true,
-      target: "esnext",
-      modulePreload: false,
-      cssMinify: "lightningcss",
-      manifest: true,
-      rollupOptions: {
-        input,
-        external,
-      },
-    },
-    plugins,
     test: {
       watch: false,
       environment: "jsdom",
-      exclude: [...configDefaults.exclude, "./test/**"],
+      exclude: ["**/node_modules/**", "**/dist/**", "test/**", "scripts/**"],
       server: {
         deps: {
           inline: [/@patternfly\/.*/],

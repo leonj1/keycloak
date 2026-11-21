@@ -1,20 +1,20 @@
 {
-  "name": "root",
+  "name": "keycloak-rust-admin-console",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.1.1",
   "scripts": {
-    "prepare": "cd .. && husky js/.husky",
-    "build": "wireit"
+    "build": "wireit",
+    "start": "node apps/admin-ui/scripts/serve.mjs",
+    "typecheck": "corepack pnpm --filter @keycloak/keycloak-admin-ui exec tsc -p tsconfig.json",
+    "test": "corepack pnpm --filter @keycloak/keycloak-admin-ui --filter @keycloak/keycloak-ui-shared --filter @keycloak/keycloak-admin-client test",
+    "test:proxy": "node --test apps/admin-ui/scripts/console-server.test.mjs",
+    "test:browser": "node apps/admin-ui/scripts/browser-smoke.mjs"
   },
   "wireit": {
     "build": {
       "dependencies": [
-        "./apps/account-ui:build",
-        "./apps/admin-ui:build",
-        "./libs/keycloak-admin-client:build",
-        "./libs/ui-shared:build",
-        "./themes-vendor:build"
+        "./apps/admin-ui:build"
       ]
     }
   },
@@ -26,21 +26,15 @@
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-lodash": "^8.0.0",
-    "eslint-plugin-playwright": "^2.4.0",
     "eslint-plugin-prettier": "^5.5.4",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-compiler": "19.1.0-rc.2",
     "eslint-plugin-react-hooks": "~6.1.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.4.0",
     "prettier": "^3.6.2",
     "tslib": "^2.8.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.42.0",
     "wireit": "^0.15.0"
-  },
-  "lint-staged": {
-    "*.{js,jsx,mjs,ts,tsx}": "eslint --cache --fix"
   },
   "author": {
     "name": "Red Hat, Inc.",

@@ -1,26 +1,9 @@
-# Keycloak JavaScript
+# Frontend workspace
 
-This directory contains the UIs and related libraries of the Keycloak project written in JavaScript (and TypeScript).
+- [Admin Console](apps/admin-ui/) contains the React application and its Node host.
+- [Shared UI](libs/ui-shared/) contains reusable React components.
+- [Admin API client](libs/keycloak-admin-client/) contains the TypeScript client and its OpenAPI input.
 
-## Directory structure
+See the [repository README](../README.md) for setup, environment variables, and verification commands.
 
-    ├── apps
-    │   ├── account-ui                 # Account UI for account management i.e controlling password and account access, tracking and managing permissions
-    │   ├── admin-ui                   # Admin UI for handling login, registration, administration, and account management
-    │   └── keycloak-server            # Keycloak server for local development of UIs
-    ├── libs
-    │   ├── ui-shared                  # Shared component library between admin and account
-    │   └── keycloak-admin-client      # Keycloak Admin Client library for Keycloak REST API
-    ├── ...
-
-## Data processing
-
-Red Hat may process information including business contact information and code contributions as part of its participation in the project, data is processed in accordance with [Red Hat Privacy Statement](https://www.redhat.com/en/about/privacy-policy).
-
-To speed up the build process, the following build flag can be used to disable the processing of these modules:
-
-    -Dskip.npm
-
-## Contributing
-
-If you want to contribute please look at the [coding guidelines](CODING_GUIDELINES.md)
+See [Coding Guidelines](CODING_GUIDELINES.md) for frontend conventions.

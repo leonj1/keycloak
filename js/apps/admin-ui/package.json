@@ -18,29 +18,12 @@
     "access": "public"
   },
   "scripts": {
-    "dev": "wireit",
     "build": "wireit",
     "build-lib": "wireit",
-    "preview": "wireit",
     "lint": "wireit",
-    "test": "wireit",
-    "test:integration": "wireit"
+    "test": "wireit"
   },
   "wireit": {
-    "dev": {
-      "command": "vite --host",
-      "dependencies": [
-        "../../libs/ui-shared:build",
-        "../../libs/keycloak-admin-client:build"
-      ]
-    },
-    "preview": {
-      "command": "vite preview",
-      "dependencies": [
-        "../../libs/ui-shared:build",
-        "../../libs/keycloak-admin-client:build"
-      ]
-    },
     "build": {
       "command": "vite build",
       "dependencies": [
@@ -48,14 +31,16 @@
         "../../libs/keycloak-admin-client:build"
       ],
       "files": [
+        "index.html",
+        "messages",
         "public",
         "src",
-        "tsconfig.json",
+        "tsconfig*.json",
         "../../tsconfig.json",
         "vite.config.ts"
       ],
       "output": [
-        "target/classes/theme/keycloak.v2/admin/resources"
+        "dist"
       ]
     },
     "build-lib": {
@@ -76,12 +61,6 @@
       "command": "vitest",
       "dependencies": [
         "../../libs/ui-shared:build",
-        "../../libs/keycloak-admin-client:build"
-      ]
-    },
-    "test:integration": {
-      "command": "playwright test",
-      "dependencies": [
         "../../libs/keycloak-admin-client:build"
       ]
     }
@@ -113,7 +92,6 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.11.0",
     "@playwright/test": "^1.64.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
@@ -126,12 +104,9 @@
     "@vitejs/plugin-react-swc": "^4.2.2",
     "cross-env": "^10.1.0",
     "jsdom": "^27.4.0",
-    "lightningcss": "^1.30.2",
     "properties-file": "^5.0.5",
-    "ts-node": "^10.9.2",
     "uuid": "^14.0.1",
     "vite": "^7.3.5",
-    "vite-plugin-checker": "^0.12.0",
     "vite-plugin-dts": "^4.5.4",
     "vitest": "^4.1.11"
   },

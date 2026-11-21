@@ -16,4 +16,5 @@ export type Environment = BaseEnvironment & {
   masterRealm: string;
   /** The version hash of the auth server. */
   resourceVersion: string;
+  administratorName?: string;
 };

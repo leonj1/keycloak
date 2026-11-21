@@ -1,2 +1,0 @@
-org.keycloak.tests.providers.events.TestEventsListenerContextDetailsProviderFactory
-org.keycloak.tests.providers.events.TestEventsListenerDeferredProviderFactory

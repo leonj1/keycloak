@@ -1,87 +1,65 @@
-![Keycloak](https://github.com/keycloak/keycloak-misc/blob/main/logo/logo.svg)
+# Keycloak Admin Console for Rust
 
-![GitHub Release](https://img.shields.io/github/v/release/keycloak/keycloak?label=latest%20release)
-[![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/6818/badge)](https://bestpractices.coreinfrastructure.org/projects/6818)
-[![CLOMonitor](https://img.shields.io/endpoint?url=https://clomonitor.io/api/projects/cncf/keycloak/badge)](https://clomonitor.io/projects/cncf/keycloak)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/keycloak/keycloak/badge)](https://securityscorecards.dev/viewer/?uri=github.com/keycloak/keycloak)
-[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/keycloak-operator)](https://artifacthub.io/packages/olm/community-operators/keycloak-operator)
-![GitHub Repo stars](https://img.shields.io/github/stars/keycloak/keycloak?style=flat)
-![GitHub commit activity](https://img.shields.io/github/commit-activity/m/keycloak/keycloak)
-[![Translation status](https://hosted.weblate.org/widget/keycloak/svg-badge.svg)](docs/translation.md)
+This fork contains the React Admin Console, its shared UI package, and its TypeScript Admin API client.
+It connects to a separately running [Rust identity server](https://github.com/leonj1/keycloak-rs).
+The Node host serves the compiled frontend and forwards browser requests to Rust on the same origin so the Rust session cookie works.
 
-# Open Source Identity and Access Management
+## Build and start
 
-Add authentication to applications and secure services with minimum effort. No need to deal with storing users or authenticating users.
+Use the Node version in [.node-version](.node-version) and [Corepack](https://github.com/nodejs/corepack).
+Corepack selects the pnpm version pinned in [js/package.json](js/package.json).
+The first build downloads the pinned Kiota generator for the checked-in Admin API schema.
 
-Keycloak provides user federation, strong authentication, user management, fine-grained authorization, and more.
+Start Rust and bootstrap a service administrator using the instructions in the Rust repository.
+Run Rust with its HTTP application path at `/`.
+Then, from this repository:
 
+```sh
+cd js
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
+corepack pnpm start
+```
 
-## Help and Documentation
+Open [http://localhost:5174](http://localhost:5174/) and sign in with your administrator client ID and secret.
+Rust validates the credentials and issues the browser session cookie.
+For local development, rerun the build after changing the frontend.
+The Node host reads the new build from `js/apps/admin-ui/dist/`.
 
-* [Documentation](https://www.keycloak.org/documentation.html)
-* [User Mailing List](https://groups.google.com/d/forum/keycloak-user) - Mailing list for help and general questions about Keycloak
-* Join [#keycloak](https://cloud-native.slack.com/archives/C056HC17KK9) for general questions, or [#keycloak-dev](https://cloud-native.slack.com/archives/C056XU905S6) on Slack for design and development discussions, by creating an account at [https://slack.cncf.io/](https://slack.cncf.io/).
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `RUST_SERVER_URL` | `http://127.0.0.1:8080` | Rust application listener reachable from the Node host |
+| `RUST_PUBLIC_ORIGIN` | Value of `RUST_SERVER_URL` | Origin configured as `PUBLIC_ORIGIN` in Rust |
+| `CONSOLE_ORIGIN` | `http://localhost:<PORT>` | Exact origin the browser uses, including scheme and port |
+| `PORT` | `5174` | Node host port |
+| `ADMIN_REALM` | `master` | Realm used for administrator sign-in |
 
+The listener binds to `0.0.0.0`.
+For a deployed console, terminate HTTPS at a reverse proxy, preserve the public `Host` header, and configure the console and Rust public origins for HTTPS.
+Keep the generated files and the Node host together when deploying.
 
-## Reporting Security Vulnerabilities
+## Verify
 
-If you have found a security vulnerability, please look at the [instructions on how to properly report it](https://github.com/keycloak/keycloak/security/policy).
+Run the same checks as CI from `js/` after building:
 
+```sh
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm test:proxy
+```
 
-## Reporting an issue
+The browser test checks the console against a live Rust server and removes its disposable user and client records.
+Start the frontend as above, then run:
 
-If you believe you have discovered a defect in Keycloak, please open [an issue](https://github.com/keycloak/keycloak/issues).
-Please remember to provide a good summary, description as well as steps to reproduce the issue.
+```sh
+corepack pnpm --filter @keycloak/keycloak-admin-ui exec playwright install chromium
+ADMIN_CLIENT_ID=your-test-admin \
+  ADMIN_CLIENT_SECRET_FILE=/path/to/test-admin-secret \
+  corepack pnpm test:browser
+```
 
+Set `CONSOLE_ORIGIN` and `ADMIN_REALM` for the browser test if you changed them when starting the frontend.
+The acceptance coverage is Rust v0.1.0 sign-in, user and public OIDC client management, and sign-out.
+Some inherited screens expose options outside the Rust v0.1.0 API contract, including user required-action assignments and advanced client settings.
 
-## Getting started
-
-To run Keycloak, download the distribution from our [website](https://www.keycloak.org/downloads.html). Unzip and run:
-
-    bin/kc.[sh|bat] start-dev
-
-Alternatively, you can use the Docker image by running:
-
-    docker run quay.io/keycloak/keycloak start-dev
-    
-For more details refer to the [Keycloak Documentation](https://www.keycloak.org/documentation.html).
-
-
-## Building from Source
-
-To build from source, refer to the [building and working with the code base](docs/building.md) guide.
-
-
-### Testing
-
-To run tests, refer to the [running tests](docs/tests.md) guide.
-
-
-### Writing Tests
-
-To write tests, refer to the [writing tests](docs/tests-development.md) guide.
-
-
-## Contributing
-
-Before contributing to Keycloak, please read our [contributing guidelines](CONTRIBUTING.md). Participation in the Keycloak project is governed by the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
-
-Joining a [community meeting](https://www.keycloak.org/community) is a great way to get involved and help shape the future of Keycloak.
-
-## Code of Conduct
-
-We are committed to providing a safe, welcoming, and constructive environment for all Keycloak contributors and users.
-To protect this space, we actively enforce our [Code of Conduct](https://github.com/keycloak/.github/blob/main/CODE_OF_CONDUCT.md).
-If you wish to report an incident or appeal a moderation decision, please email `keycloak-coc@googlegroups.com`.
-
-## Other Keycloak Projects
-
-* [Keycloak](https://github.com/keycloak/keycloak) - Keycloak Server and Java adapters
-* [Keycloak Client](https://github.com/keycloak/keycloak-client) - Keycloak client libraries
-* [Keycloak QuickStarts](https://github.com/keycloak/keycloak-quickstarts) - QuickStarts for getting started with Keycloak
-* [Keycloak Node.js Connect](https://github.com/keycloak/keycloak-nodejs-connect) - Node.js adapter for Keycloak
-
-
-## License
-
-* [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+See [FRONTEND_PLAN.md](FRONTEND_PLAN.md) for each migration gate and its result.

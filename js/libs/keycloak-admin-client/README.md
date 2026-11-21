@@ -104,30 +104,14 @@ setInterval(() => kcAdminClient.auth(credentials), 58 * 1000); // 58 seconds
 
 ## Building and running the tests
 
-To build the source do a build:
+From the `js/` workspace, run:
 
-```bash
-pnpm build
+```sh
+corepack pnpm --filter @keycloak/keycloak-admin-client build
+corepack pnpm --filter @keycloak/keycloak-admin-client test
 ```
 
-Start the Keycloak server in development mode using port 8180. See the instructions in the [Keycloak server app](../../apps/keycloak-server/README.md).
-
-```bash
-cd ../../apps/keycloak-server
-pnpm start --http-port 8180
-```
-
-If you started your container manually make sure there is an admin user named `admin` with password `admin`, the server is started in development mode using port 8180 and the required features are enabled.
-
-```bash
-./kc.sh start-dev --http-port 8180 --features transient-users,oid4vc-vci,declarative-ui,quick-theme,spiffe,kubernetes-service-accounts,workflows,client-auth-federated,jwt-authorization-grant
-```
-
-Then start the tests with:
-
-```bash
-pnpm test
-```
+For browser integration with the Rust server, see the [console verification commands](../../../README.md#verify).
 
 ## Supported APIs
 

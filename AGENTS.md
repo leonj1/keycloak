@@ -45,4 +45,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on pull requests, testing,
   Do not add sections like Summary, Root Cause, Solution, Changes, Advantages, or Testing, and do not use emojis.
   Disclose AI agent usage in a single short sentence, as required by [CONTRIBUTING.md](CONTRIBUTING.md#use-of-generative-ai), instead of a promotional footer.
   Mention testing only if something is non-obvious.
-* Run `./mvnw -Pspotless spotless:apply` before committing (see [CONTRIBUTING.md](CONTRIBUTING.md#spotless)); CI fails on formatting violations.
+* Run the frontend verification commands in [CONTRIBUTING.md](CONTRIBUTING.md#verification) before committing.
