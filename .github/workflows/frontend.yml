@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   console:
-    runs-on: ubuntu-latest
+    # Enable only after isolated, single-use runners are available to this public repository.
+    runs-on: >-
+      ${{ fromJSON(vars.KEYCLOAK_SELF_HOSTED_LINUX == 'true' &&
+        github.ref == 'refs/heads/main' &&
+        (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        '["self-hosted", "Linux", "X64"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     defaults:
       run:
