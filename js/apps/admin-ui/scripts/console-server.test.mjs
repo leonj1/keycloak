@@ -122,7 +122,12 @@ test("serves the built console and forwards the Rust session on the configured o
   assert.equal(console.headers.get("location"), "/");
   const info = await (await call("/admin/serverinfo", authenticated)).json();
   assert.equal(info.systemInfo.version, "0.1.0");
-  assert.deepEqual(info.themes.login, [{ name: "builtin" }]);
+  assert.deepEqual(info.themes, {
+    login: [{ name: "builtin" }],
+    account: [],
+    admin: [],
+    email: [],
+  });
 
   const ownRealm = await (
     await call("/admin/team/console/whoami?currentRealm=team", authenticated)

@@ -123,9 +123,15 @@ function adaptServerInfo(info) {
     systemInfo:
       info.systemInfo ?? (info.runtime && { version: info.runtime.version }),
     themes: Object.fromEntries(
-      Object.entries(info.themes ?? {}).map(([type, themes]) => [
+      Object.entries({
+        login: [],
+        account: [],
+        admin: [],
+        email: [],
+        ...info.themes,
+      }).map(([type, themes]) => [
         type,
-        themes.map((theme) =>
+        (themes ?? []).map((theme) =>
           typeof theme === "string" ? { name: theme } : theme,
         ),
       ]),
