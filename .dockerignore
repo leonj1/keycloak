@@ -1,0 +1,17 @@
+**
+!js/
+!js/**
+js/**/.env
+js/**/.env.*
+js/**/.eslintcache
+js/**/.wireit
+js/**/dist
+js/**/node_modules
+js/**/playwright-report
+js/**/playwright-results.json
+js/**/test-results
+js/**/*.log
+js/**/*.tsbuildinfo
+js/libs/keycloak-admin-client/.kiota
+js/libs/keycloak-admin-client/lib
+js/libs/keycloak-admin-client/src/generated
