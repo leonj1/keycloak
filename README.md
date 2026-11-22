@@ -38,6 +38,24 @@ The listener binds to `0.0.0.0`.
 For a deployed console, terminate HTTPS at a reverse proxy, preserve the public `Host` header, and configure the console and Rust public origins for HTTPS.
 Keep the generated files and the Node host together when deploying.
 
+## Run with Docker
+
+From the repository root, build the image and start the container.
+
+```sh
+docker build -t keycloak-admin-console .
+docker run --rm --init -p 5174:5174 \
+  --add-host=host.docker.internal:host-gateway \
+  -e RUST_SERVER_URL=http://host.docker.internal:8080 \
+  -e RUST_PUBLIC_ORIGIN=http://localhost:8080 \
+  keycloak-admin-console
+```
+
+This example assumes Rust listens on port `8080` on an interface reachable from Docker and uses `http://localhost:8080` as `PUBLIC_ORIGIN`.
+If Rust runs in another container, attach both containers to the same Docker network and use the Rust container name in `RUST_SERVER_URL`.
+Set `RUST_PUBLIC_ORIGIN` to the value configured in Rust and `CONSOLE_ORIGIN` to the address you open in the browser.
+With the example above, open [http://localhost:5174](http://localhost:5174/).
+
 ## Verify
 
 Run the same checks as CI from `js/` after building:
