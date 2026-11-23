@@ -62,6 +62,75 @@ function httpOrigin(value, name) {
   return url;
 }
 
+function parseAiIntegrations(value) {
+  if (value === undefined) return;
+
+  const invalid = () =>
+    new Error(
+      "ACCOUNT_AI_INTEGRATIONS must specify a non-master realm, an exact HTTPS MCP URL, and distinct public client IDs for Claude or ChatGPT",
+    );
+  let config;
+  try {
+    config = JSON.parse(value);
+  } catch {
+    throw invalid();
+  }
+  if (
+    !config ||
+    Object.keys(config).length !== 3 ||
+    typeof config.realm !== "string" ||
+    !/^[a-zA-Z0-9_-]{1,64}$/.test(config.realm) ||
+    config.realm === "master" ||
+    typeof config.mcpUrl !== "string" ||
+    !config.providers ||
+    typeof config.providers !== "object" ||
+    Array.isArray(config.providers)
+  ) {
+    throw invalid();
+  }
+  const url = URL.parse(config.mcpUrl);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    config.mcpUrl !== url.origin + url.pathname ||
+    !/^(?:\/[\w.~-]+)*\/mcp$/.test(url.pathname)
+  ) {
+    throw invalid();
+  }
+  const providers = Object.entries(config.providers);
+  if (
+    providers.length === 0 ||
+    providers.some(
+      ([name, id]) =>
+        !["Claude", "ChatGPT"].includes(name) ||
+        typeof id !== "string" ||
+        !id ||
+        !id.isWellFormed() ||
+        Buffer.byteLength(id) > 255 ||
+        /\p{Cc}/u.test(id) ||
+        [".", ".."].includes(id),
+    ) ||
+    new Set(providers.map(([, id]) => id)).size !== providers.length
+  ) {
+    throw invalid();
+  }
+  const basePath = url.pathname.slice(0, -"/mcp".length);
+  const accountPath = `${basePath}/realms/${config.realm}/account`;
+  const assetPath = `${basePath}/account-ai-integrations.js`;
+  const accountScript = `<script src="${basePath}/resources/v1/account/builtin/js/console.js" defer></script>`;
+  const publicConfig = JSON.stringify({ mcpUrl: config.mcpUrl, providers })
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll("'", "&#39;");
+  return {
+    basePath,
+    accountPath,
+    assetPath,
+    accountScript,
+    integrationsScript: `<script src="${assetPath}" data-config='${publicConfig}' defer></script>`,
+  };
+}
+
 function json(res, body) {
   res
     .writeHead(200, {
@@ -147,6 +216,7 @@ export function createConsoleServer({
   rustPublicOrigin = backendOrigin,
   consoleOrigin,
   realm = "master",
+  accountAiIntegrations,
   dist = new URL("../dist/", import.meta.url),
 }) {
   const backend = httpOrigin(backendOrigin, "RUST_SERVER_URL");
@@ -158,6 +228,7 @@ export function createConsoleServer({
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(realm)) {
     throw new Error("ADMIN_REALM must be a Rust realm name");
   }
+  const aiIntegrations = parseAiIntegrations(accountAiIntegrations);
   const request = backend.protocol === "https:" ? httpsRequest : httpRequest;
 
   function sameOrigin(req) {
@@ -267,6 +338,29 @@ export function createConsoleServer({
       }
     }
     const headers = proxyHeaders(upstream.headers);
+    if (
+      aiIntegrations &&
+      req.method === "GET" &&
+      upstream.statusCode === 200 &&
+      headers["content-type"]?.startsWith("text/html") &&
+      !headers["content-encoding"] &&
+      ["", "/profile", "/security", "/security/sessions"].some(
+        (section) => pathname === aiIntegrations.accountPath + section,
+      )
+    ) {
+      // The native account script is present only on the signed-in console.
+      // The second deferred script runs after it and shares its account client.
+      let html = "";
+      for await (const chunk of upstream.setEncoding("utf8")) html += chunk;
+      html = html.replace(
+        aiIntegrations.accountScript,
+        () => aiIntegrations.accountScript + aiIntegrations.integrationsScript,
+      );
+      delete headers.etag;
+      headers["content-length"] = Buffer.byteLength(html);
+      headers["cache-control"] = "no-store";
+      return res.writeHead(200, headers).end(html);
+    }
     res.writeHead(upstream.statusCode, headers);
     await pipeline(upstream, res);
   }
@@ -321,18 +415,35 @@ export function createConsoleServer({
     if (req.method === "GET" && messages)
       return translations(req, res, messages[1], messages[2]);
 
+    const isIntegrationsAsset = pathname === aiIntegrations?.assetPath;
+    const basePath = aiIntegrations?.basePath;
+    const mountedPath =
+      basePath && pathname.startsWith(`${basePath}/`)
+        ? pathname.slice(basePath.length)
+        : "";
     if (
-      /^\/(?:admin|realms|welcome-content)\/|^\/resources\/v1\//.test(pathname)
+      !isIntegrationsAsset &&
+      (/^\/(?:admin|realms|welcome-content)\/|^\/resources\/v1\//.test(
+        pathname,
+      ) ||
+        /^\/realms\/[^/]+\/account(?:\/|$)|^\/(?:welcome-content|resources\/v1\/account)\//.test(
+          mountedPath,
+        ))
     ) {
       return proxy(req, res, pathname, search, searchParams);
     }
 
     if (
       isRead &&
-      (pathname === "/" ||
+      (isIntegrationsAsset ||
+        pathname === "/" ||
         /^\/(?:assets\/)?[\w.-]+\.[a-z0-9]+$/i.test(pathname))
     ) {
-      const file = pathname === "/" ? "index.html" : pathname.slice(1);
+      const file = isIntegrationsAsset
+        ? "account-ai-integrations.js"
+        : pathname === "/"
+          ? "index.html"
+          : pathname.slice(1);
       const location = new URL(file, dist);
       const info = await stat(location).catch((error) => {
         if (error.code !== "ENOENT") throw error;
