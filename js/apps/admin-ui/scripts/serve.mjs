@@ -14,6 +14,7 @@ const server = createConsoleServer({
   rustPublicOrigin: process.env.RUST_PUBLIC_ORIGIN,
   consoleOrigin: process.env.CONSOLE_ORIGIN ?? `http://localhost:${port}`,
   realm: process.env.ADMIN_REALM,
+  accountAiIntegrations: process.env.ACCOUNT_AI_INTEGRATIONS,
 });
 
 server.listen(port, "0.0.0.0", () =>

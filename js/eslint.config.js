@@ -138,7 +138,7 @@ export default tseslint.config(
   },
   {
     ...tseslint.configs.disableTypeChecked,
-    files: ["apps/admin-ui/scripts/*.mjs"],
+    files: ["apps/admin-ui/scripts/*.mjs", "apps/admin-ui/public/*.js"],
   },
   {
     files: ["libs/keycloak-admin-client/test/**"],
